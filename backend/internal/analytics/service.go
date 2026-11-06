@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/TaH00R/packetlens/backend/internal/anomaly"
 	"github.com/TaH00R/packetlens/backend/internal/store"
 )
 
@@ -14,6 +15,7 @@ var Ranges = map[string]time.Duration{"5m": 5 * time.Minute, "15m": 15 * time.Mi
 type Reader interface {
 	HistoryBounds(context.Context) (*time.Time, *time.Time, error)
 	WalkMeasurements(context.Context, store.Filter, bool, func(store.Measurement) error) error
+	WalkAnomalyStarts(context.Context, store.Filter, func(anomaly.Event) error) error
 }
 
 func Build(ctx context.Context, source Reader, selected string, to time.Time) (Report, error) {
@@ -77,6 +79,18 @@ func summarize(ctx context.Context, source Reader, from, to time.Time, includeTr
 	})
 	if err != nil {
 		return result, err
+	}
+	if includeTrends {
+		err = source.WalkAnomalyStarts(ctx, store.Filter{From: &from, To: &to}, func(e anomaly.Event) error {
+			groupTrends[e.Type].mark(e)
+			if target := targetTrends[e.Type+":"+e.Target]; target != nil {
+				target.mark(e)
+			}
+			return nil
+		})
+		if err != nil {
+			return result, err
+		}
 	}
 	keys := make([]string, 0, len(targets))
 	for key := range targets {

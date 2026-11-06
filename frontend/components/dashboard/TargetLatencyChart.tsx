@@ -8,6 +8,7 @@ import {
   Line,
   LineChart,
   ResponsiveContainer,
+  ReferenceDot,
   Tooltip,
   XAxis,
   YAxis,
@@ -17,10 +18,12 @@ import type {
   MonitoringSnapshot,
   ProbeResult,
 } from "@/types/metrics";
+import type { LatencyAnomaly } from "@/types/anomalies";
 
 type ProbeType = "tcp" | "dns";
 
 interface Props {
+  anomalies?: LatencyAnomaly[];
   results: MonitoringSnapshot[];
   initialType?: ProbeType;
   availableTypes?: ProbeType[];
@@ -36,6 +39,7 @@ const COLORS = [
 ];
 
 export default function TargetLatencyChart({
+  anomalies,
   results,
   initialType = "tcp",
   availableTypes = ["tcp", "dns"],
@@ -59,6 +63,8 @@ export default function TargetLatencyChart({
 
     return Array.from(unique);
   }, [recent, probeType]);
+
+  const markers = (anomalies ?? []).filter((e) => e.type === probeType && targets.includes(e.target) && recent.length > 0 && Date.parse(e.cycle_timestamp) >= Date.parse(recent[0].timestamp) && Date.parse(e.cycle_timestamp) <= Date.parse(recent[recent.length-1].timestamp));
 
   const chartData = useMemo(() => {
     return recent.map((snapshot) => {
@@ -122,6 +128,7 @@ export default function TargetLatencyChart({
 
       {/* Chart content */}
       <div className="p-5">
+        {anomalies && <p className="mb-3 text-xs text-red-300">Red dots mark onset measurements from the newest loaded anomaly-feed page; older onsets may not be shown here.</p>}
         {targets.length === 0 ? (
           <div className="flex h-[300px] items-center justify-center text-sm text-gray-500">
             Waiting for measurements...
@@ -236,6 +243,7 @@ export default function TargetLatencyChart({
                       isAnimationActive={false}
                     />
                   ))}
+                  {markers.map((e) => <ReferenceDot key={e.id} x={Date.parse(e.cycle_timestamp)} y={e.observed_latency_ms} r={4} fill="#F87171" stroke="#F87171" ifOverflow="extendDomain" />)}
                 </LineChart>
               </ResponsiveContainer>
             </div>

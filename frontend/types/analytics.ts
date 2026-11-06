@@ -22,6 +22,8 @@ export interface AnalyticsSummary {
   histogram: HistogramBucket[];
 }
 export interface AnalyticsPoint {
+  anomaly_count?: number;
+  anomaly_latency_ms?: number | null;
   timestamp: string;
   attempts: number;
   successful: number;

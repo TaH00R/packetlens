@@ -6,9 +6,10 @@ import type { RemoteReport } from "@/types/analytics";
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080").replace(/\/$/, "");
 
-export function useRemoteReport<T>(path: string, parse: (value: unknown) => T, intervalMs: number, connectionVersion: number): RemoteReport<T> {
-  const [state, setState] = useState<RemoteReport<T> & { path: string }>({ path, data: null, loading: true, error: null });
+export function useRemoteReport<T>(path: string | null, parse: (value: unknown) => T, intervalMs: number, connectionVersion: number): RemoteReport<T> {
+  const [state, setState] = useState<RemoteReport<T> & { path: string | null }>({ path, data: null, loading: true, error: null });
   useEffect(() => {
+    if (path === null) return;
     let disposed = false;
     let active = false;
     let controller: AbortController | null = null;
@@ -36,5 +37,5 @@ export function useRemoteReport<T>(path: string, parse: (value: unknown) => T, i
     const timer = setInterval(() => void refresh(), intervalMs);
     return () => { disposed = true; clearInterval(timer); if (timeout) clearTimeout(timeout); controller?.abort(); };
   }, [path, parse, intervalMs, connectionVersion]);
-  return state.path === path ? state : { data: null, loading: true, error: null };
+  return path === null ? { data: null, loading: false, error: null } : state.path === path ? state : { data: null, loading: true, error: null };
 }

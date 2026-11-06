@@ -33,12 +33,14 @@ type Summary struct {
 }
 
 type Trend struct {
-	Timestamp    time.Time `json:"timestamp"`
-	Attempts     int       `json:"attempts"`
-	Successful   int       `json:"successful"`
-	Average      *float64  `json:"avg_latency_ms"`
-	Jitter       *float64  `json:"jitter_ms"`
-	Availability *float64  `json:"availability"`
+	AnomalyCount   int       `json:"anomaly_count"`
+	AnomalyLatency *float64  `json:"anomaly_latency_ms"`
+	Timestamp      time.Time `json:"timestamp"`
+	Attempts       int       `json:"attempts"`
+	Successful     int       `json:"successful"`
+	Average        *float64  `json:"avg_latency_ms"`
+	Jitter         *float64  `json:"jitter_ms"`
+	Availability   *float64  `json:"availability"`
 }
 
 type Series struct {

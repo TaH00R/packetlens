@@ -4,6 +4,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/TaH00R/packetlens/backend/internal/anomaly"
 	"github.com/TaH00R/packetlens/backend/internal/store"
 )
 
@@ -130,10 +131,10 @@ func newTimeline(from, to time.Time) *timeline {
 	return t
 }
 
-func (t *timeline) observe(m store.Measurement, difference *float64) {
+func (t *timeline) index(timestamp time.Time) int {
 	i := 0
 	if span := t.to.Sub(t.from); span > 0 {
-		i = int(float64(m.SnapshotTimestamp.Sub(t.from)) / float64(span) * TrendBuckets)
+		i = int(float64(timestamp.Sub(t.from)) / float64(span) * TrendBuckets)
 	}
 	if i < 0 {
 		i = 0
@@ -141,6 +142,19 @@ func (t *timeline) observe(m store.Measurement, difference *float64) {
 	if i >= TrendBuckets {
 		i = TrendBuckets - 1
 	}
+	return i
+}
+
+func (t *timeline) mark(e anomaly.Event) {
+	b := &t.buckets[t.index(e.CycleTimestamp)]
+	b.AnomalyCount++
+	if b.AnomalyLatency == nil || e.ObservedLatency > *b.AnomalyLatency {
+		b.AnomalyLatency = number(e.ObservedLatency)
+	}
+}
+
+func (t *timeline) observe(m store.Measurement, difference *float64) {
+	i := t.index(m.SnapshotTimestamp)
 	b := &t.buckets[i]
 	b.Attempts++
 	if m.Probe.Success {

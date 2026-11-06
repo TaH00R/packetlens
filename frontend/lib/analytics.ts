@@ -1,12 +1,9 @@
 import type { AnalyticsReport, AvailabilityReport } from "../types/analytics";
+import { isRecord as record, isNonnegative as nonnegative, isCount as count, isTimestamp as timestamp } from "./validation";
 
 type RecordValue = Record<string, unknown>;
-function record(value: unknown): value is RecordValue { return typeof value === "object" && value !== null }
-function nonnegative(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value) && value >= 0 }
-function count(value: unknown): value is number { return nonnegative(value) && Number.isSafeInteger(value) }
 function nullableNumber(value: unknown) { return value === null || nonnegative(value) }
 function rate(value: unknown) { return value === null || (nonnegative(value) && value <= 100) }
-function timestamp(value: unknown): value is string { return typeof value === "string" && Number.isFinite(Date.parse(value)) }
 function nullableTime(value: unknown) { return value === null || timestamp(value) }
 function identity(v: RecordValue, target: boolean) {
   return (v.type === "tcp" || v.type === "dns") && (target ? typeof v.target === "string" && v.target.length > 0 : v.target === undefined);
@@ -22,7 +19,8 @@ function summary(value: unknown, target: boolean): boolean {
   return value.histogram.reduce((sum: number, b: RecordValue) => sum + (b.count as number), 0) === value.successful;
 }
 function point(value: unknown): boolean {
-  return record(value) && timestamp(value.timestamp) && counts(value) && nullableNumber(value.avg_latency_ms) && nullableNumber(value.jitter_ms) && (value.successful !== 0 || value.avg_latency_ms === null);
+  return record(value) && timestamp(value.timestamp) && counts(value) && nullableNumber(value.avg_latency_ms) && nullableNumber(value.jitter_ms) && (value.successful !== 0 || value.avg_latency_ms === null) &&
+    ((value.anomaly_count === undefined && value.anomaly_latency_ms === undefined) || (count(value.anomaly_count) && (value.anomaly_count === 0 ? value.anomaly_latency_ms === null : nonnegative(value.anomaly_latency_ms))));
 }
 function series(value: unknown, target: boolean): boolean { return record(value) && identity(value, target) && Array.isArray(value.points) && value.points.length === 60 && value.points.every(point) }
 function twoGroups(values: unknown, validate: (v: unknown) => boolean): boolean {

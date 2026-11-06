@@ -9,6 +9,14 @@ import {
 
 const metrics = [
   {
+    title: "Latency anomaly episodes",
+    icon: Activity,
+    color: "text-red-400",
+    description: "Unusually high successful latency relative to a target's recent normal measurements.",
+    explanation: "The detector uses median + max(minimum increase, multiplier times median absolute deviation). It excludes the current measurement, waits for enough normal successes, and freezes the threshold during an open episode. Repeated highs update one episode. Recovery needs consecutive normal-range successes; failures and gaps do not count as recovery. These flags do not identify a root cause.",
+    example: "With a 10 ms median, zero MAD, and a 10 ms minimum increase, successful latency above 20 ms starts an episode. Its original threshold remains 20 ms across backend restarts.",
+  },
+  {
     title: "Latency percentiles",
     icon: Clock,
     color: "text-teal-400",

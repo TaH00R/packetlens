@@ -10,6 +10,7 @@ Use it only for destinations you own or are authorized to monitor.
 - Overview, TCP Analytics, DNS Analytics, Network Health, and a metrics guide.
 - Exact P50/P90/P95/P99 successful latencies, distributions, target comparisons, and prior-period comparisons.
 - Per-target mean and latest-pair jitter, with historical trends.
+- Persistent rolling median/MAD anomaly episodes, duplicate suppression, a feed, and chart markers.
 - Observed availability for 1h, 24h, 7d, and 30d, with outcome streaks and timestamps.
 - Aggregate and per-target latency charts; failures appear as gaps.
 - Global ranges: last 5 minutes, 15 minutes, hour, 6 hours, 24 hours, or All.
@@ -37,6 +38,7 @@ packetlens/
 |   |-- cmd/packetlens/main.go
 |   |-- internal/
 |   |   |-- analytics/    # Persisted latency, jitter, and availability
+|   |   |-- anomaly/      # Pure rolling median/MAD detector and episode policy
 |   |   |-- api/          # HTTP and WebSocket handlers
 |   |   |-- monitor/      # Complete monitoring cycles and types
 |   |   |-- probe/        # TCP and DNS checks
@@ -177,6 +179,7 @@ JSON error with status 503. Health also returns 503 when the database is unreach
 | GET | `/api/metrics` | `count`, `results` (flattened probes) |
 | GET | `/api/stats` | `total_results`, `probes` (statistics by type) |
 | GET | `/api/analytics` | Full-range latency, jitter, histogram, trends, previous period |
+| GET | `/api/anomalies` | Bounded, filtered anomaly episode feed |
 | GET | `/api/availability` | Fixed-window observed availability, streaks, last outcomes |
 | GET | `/api/snapshots` | `count`, `snapshots`, `has_more`, `next_cursor` |
 | WebSocket | `/api/ws` | One snapshot per new monitoring cycle |
@@ -326,10 +329,115 @@ per server; excess requests return JSON 429 with Retry-After. Other database err
 return generic JSON 503 responses and contextual logs. No new production dependency
 was added for analytics.
 
+## Statistical latency anomaly detection
+
+The backend now runs a detector independently for each probe type and exact target.
+No external AI service is used. Detection starts with new measurements after the
+schema-v2 upgrade; old history is preserved but not retrospectively classified.
+
+Before evaluating a successful probe, take up to the configured window of preceding
+accepted normal successes, excluding samples older than the maximum baseline age.
+The current probe is excluded. With enough samples:
+
+```text
+baseline = median(previous normal latencies)
+MAD = median(abs(previous normal latency - baseline))
+threshold = baseline + max(minimum_delta_ms, MAD_multiplier * MAD)
+anomaly = current successful latency > threshold
+```
+
+For even sample counts, median is the average of the two middle values. MAD is
+used directly, without a normal-distribution scale factor; the multiplier is in
+MAD units, not standard deviations or a confidence probability. The absolute
+floor prevents zero-MAD baselines from flagging tiny fluctuations. A probe exactly
+at the threshold is normal. Failures neither enter the baseline nor become zero-ms
+latency observations. Out-of-order probe timestamps are stored as raw history but
+do not advance detector state or create retrospective episodes.
+
+Runtime configuration (process environment, also in `backend/.env.example`):
+
+| Variable | Default | Valid range |
+| --- | --- | --- |
+| `PACKETLENS_ANOMALY_WINDOW` | 60 | 3..500 accepted normal successes |
+| `PACKETLENS_ANOMALY_MIN_SAMPLES` | 20 | 3..window |
+| `PACKETLENS_ANOMALY_MAD_MULTIPLIER` | 6 | Finite, 1..100 |
+| `PACKETLENS_ANOMALY_MIN_DELTA_MS` | 10 | Finite, 0.1..60000 ms |
+| `PACKETLENS_ANOMALY_MAX_AGE` | 15m | 1m..24h, Go duration syntax |
+| `PACKETLENS_ANOMALY_RECOVERY_SAMPLES` | 3 | 1..100 consecutive normal successes |
+
+At the five-second default cadence, a new target usually needs about 100 seconds
+of successful observations before its first evaluation. Baselines and recovery
+progress survive restarts. They are persisted in the same transaction as raw
+snapshots and episode updates, so a failed write cannot partially advance detection.
+Configure baseline age and minimum samples to fit the probe cadence; too few recent
+normal successes means no classification.
+
+One open episode is allowed per probe type and target, enforced by a SQLite unique
+index. Its threshold stays frozen while open. Further high successes update the
+same ID, anomalous-sample count, most recent high timestamp, and peak latency.
+Initial latency and threshold remain unchanged. Severity starts as warning; it is
+critical when any high latency reaches `baseline + 2 * (threshold - baseline)`.
+Severity only escalates within an episode. These categories describe latency
+excursions, not confirmed outages or causes.
+
+Recovery requires consecutive successful probes at or below that frozen threshold.
+A failure or another high latency resets recovery progress. A gap longer than the
+currently configured baseline age resets partial recovery; missing time does not
+recover an episode. Confirmed recovery records both probe and cycle timestamps.
+Recovery successes can then enter the normal baseline. Subsequent high latency can
+open a new episode after sufficient normal samples exist. Existing episodes keep
+their creation-time threshold and required recovery count if startup settings
+change; current window/age settings govern baseline aging and gap handling.
+
+Open episodes and their bounded state survive raw-history retention. Cleanup
+removes up to 500 recovered episodes and 500 inactive detector states per batch,
+based on recovery/last-observation age, alongside raw snapshot cleanup. In a
+backlog with no expired snapshots, remaining episode/state batches may wait until
+the next periodic sweep. Closed episode records are independent of raw snapshot
+rows and may therefore outlive their onset measurement until recovery ages out.
+
+### Feed and chart behaviour
+
+`GET /api/anomalies` accepts `range` (the same global ranges, default 15m), optional
+`to`, `type`, exact `target`, `limit` (1..200, default 50), and `before` (the prior
+`next_cursor`). It returns `range`, `as_of`, `count`, `anomalies`, `has_more`, and
+`next_cursor`. Counts describe the returned page. Results are newest onset first,
+with stable cycle-time/ID cursor pagination. Keep filters and `to` fixed when
+walking older pages. Unknown, empty, repeated, or malformed parameters return
+JSON 400; storage failures return generic JSON 503.
+
+An episode overlaps a range when it began no later than the upper bound and has
+not recovered before the lower bound. An old ongoing episode therefore remains
+visible. Status and last-observation details reflect the latest stored episode,
+even when querying a historical window; `as_of` is the requested window endpoint,
+not a frozen historical version of the record.
+
+The shared context refreshes the newest feed page every 15 seconds and on socket
+reconnection. Dashboard, TCP, DNS, and health pages provide a chronological feed,
+probe-type filter, policy details, and working older/previous/latest pagination.
+Older-page navigation keeps the original window end fixed. Empty feeds can mean
+warmup, insufficient recent samples, or no recorded episodes; they do not establish
+network health. Runtime persistence failures are logged and live raw streaming
+continues, but failed writes cannot produce durable anomaly records.
+
+Persisted latency trends add `anomaly_count` and nullable `anomaly_latency_ms` per
+bucket. Every episode onset in the selection is counted; the displayed red dot is
+the maximum initial anomaly latency in that bucket, separately from average
+latency. Ongoing updates do not create another onset marker. Raw recent target
+charts show exact onset measurements from the newest loaded feed page only and
+explicitly label that marker limit. Existing snapshot WebSocket shapes are unchanged.
+
+The method assumes its initial normal baseline is representative. Warmup can
+include abnormal conditions, slow changes may adapt into the normal baseline,
+and a persistent legitimate step change can remain an open episode because active
+thresholds do not learn that plateau. Thresholds need operator tuning; flags are
+statistical evidence, not causal diagnoses. There is no acknowledgement/reset UI
+in this milestone, and failure-incident detection remains a separate next milestone.
+
 ## Dashboard history and time ranges
 
-The shared monitoring context loads persisted analytics every 15 seconds and
-availability every minute, also refreshing on WebSocket connection/reconnection.
+The shared monitoring context loads persisted analytics and anomalies every 15 seconds
+and availability every minute, also refreshing on WebSocket connection/reconnection.
 All pages consume that shared state. Overview summaries and latency trends,
 TCP/DNS analytics, and health jitter use all retained measurements in the global
 selection. All means all retained SQLite history for these reports. Availability
@@ -396,6 +504,9 @@ boundaries, retention cascades, concurrent access, cancellation, database errors
 and configuration validation. Analytics tests cover nearest ranks, histogram
 boundaries, target isolation, jitter chronology/failure gaps, period boundaries,
 availability windows and streaks, large histories, and concurrent reads/writes.
+Anomaly tests cover warmup, zero/nonzero MAD, strict thresholds, failure exclusion,
+episode recovery, restart continuity, atomic rollback, migration from schema v1,
+cursor/filter behaviour, marker counts, and retention of unresolved episodes.
 Tests do not need public internet access.
 
 From `frontend/`:
@@ -410,7 +521,9 @@ npm run build
 Frontend tests run through tsx and Node's test runner. jsdom supplies a simulated
 DOM for React component tests. Coverage includes nested response validation,
 REST/live merging, time ranges, empty/failed states, formatting, target/window
-selectors, abort cleanup, API errors, and late-response protection. DOM chart
+selectors, abort cleanup, API errors, and late-response protection. Anomaly tests
+cover response validation, severity/recovery rendering, feed filtering/pagination,
+and visible onset markers. DOM chart
 containers have deterministic test dimensions; these tests do not replace visual
 browser verification. The added tools are devDependencies only.
 

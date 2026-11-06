@@ -12,6 +12,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/TaH00R/packetlens/backend/internal/anomaly"
 	"github.com/TaH00R/packetlens/backend/internal/monitor"
 )
 
@@ -64,6 +65,8 @@ type Store interface {
 	Stats(context.Context, Filter) (Statistics, error)
 	HistoryBounds(context.Context) (*time.Time, *time.Time, error)
 	WalkMeasurements(context.Context, Filter, bool, func(Measurement) error) error
+	QueryAnomalies(context.Context, AnomalyQuery) (AnomalyPage, error)
+	WalkAnomalyStarts(context.Context, Filter, func(anomaly.Event) error) error
 	DeleteBefore(context.Context, time.Time) (int64, error)
 	Ping(context.Context) error
 	Close() error

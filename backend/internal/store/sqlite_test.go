@@ -72,7 +72,7 @@ func TestSQLitePersistsAndMigrates(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
 		t.Fatal(err)
 	}
-	if version != 1 || foreignKeys != 1 {
+	if version != 2 || foreignKeys != 1 {
 		t.Fatalf("version=%d foreign_keys=%d", version, foreignKeys)
 	}
 	for _, name := range []string{"snapshots_timestamp_id", "probe_results_timestamp", "probe_results_target_type", "probe_results_type"} {
@@ -326,6 +326,38 @@ func TestSQLiteMigrationRollback(t *testing.T) {
 	}
 	if version != 0 || snapshotTables != 0 || marker != "preserve me" {
 		t.Fatalf("migration was partially applied: version=%d tables=%d marker=%s", version, snapshotTables, marker)
+	}
+}
+
+func TestUpgradeVersionOnePreservesHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v1.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := migrations.ReadFile("migrations/001_snapshots.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(string(body)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO snapshots(id,timestamp) VALUES (?,?); PRAGMA user_version=1", fmt.Sprintf("%032x", 1), formatTime(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := OpenSQLite(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	page, err := s.QuerySnapshots(context.Background(), Query{})
+	if err != nil || len(page.Snapshots) != 1 {
+		t.Fatalf("migration lost history: %+v %v", page, err)
+	}
+	feed, err := s.QueryAnomalies(context.Background(), AnomalyQuery{})
+	if err != nil || len(feed.Events) != 0 {
+		t.Fatal("migration invented retrospective anomalies")
 	}
 }
 

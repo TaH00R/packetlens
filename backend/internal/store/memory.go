@@ -6,14 +6,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/TaH00R/packetlens/backend/internal/anomaly"
 	"github.com/TaH00R/packetlens/backend/internal/monitor"
 )
 
 type MemoryStore struct {
-	mu        sync.RWMutex
-	snapshots []monitor.Snapshot
-	capacity  int
-	closed    bool
+	mu            sync.RWMutex
+	snapshots     []monitor.Snapshot
+	capacity      int
+	closed        bool
+	anomalyStates map[string]anomaly.State
+	anomalyEvents map[string]anomaly.Event
 }
 
 var _ Store = (*MemoryStore)(nil)
@@ -36,6 +39,18 @@ func (s *MemoryStore) SaveSnapshot(ctx context.Context, snapshot monitor.Snapsho
 			return snapshot, fmt.Errorf("duplicate snapshot ID")
 		}
 	}
+	ordinal := 0
+	for _, group := range [][]monitor.ProbeResult{snapshot.TCP, snapshot.DNS} {
+		for _, p := range group {
+			key := p.Type + ":" + p.Target
+			next, event := anomaly.Process(s.anomalyStates[key], anomaly.DefaultConfig(), snapshot.ID, ordinal, snapshot.Timestamp, p)
+			s.anomalyStates[key] = next
+			if event != nil {
+				s.anomalyEvents[event.ID] = *event
+			}
+			ordinal++
+		}
+	}
 	s.addSnapshot(snapshot)
 	return snapshot, nil
 }
@@ -46,6 +61,7 @@ func NewMemoryStore(capacity int) *MemoryStore {
 	}
 
 	return &MemoryStore{
+		anomalyStates: make(map[string]anomaly.State), anomalyEvents: make(map[string]anomaly.Event),
 		snapshots: make([]monitor.Snapshot, 0, capacity),
 		capacity:  capacity,
 	}
@@ -64,6 +80,20 @@ func (s *MemoryStore) addSnapshot(snapshot monitor.Snapshot) {
 	}
 
 	s.snapshots = append(s.snapshots, cloneSnapshot(snapshot))
+	// Closed detector records follow the test/development raw-history window.
+	if len(s.snapshots) > 0 {
+		oldest := s.snapshots[0].Timestamp
+		for id, event := range s.anomalyEvents {
+			if event.RecoveryCycle != nil && event.RecoveryCycle.Before(oldest) {
+				delete(s.anomalyEvents, id)
+			}
+		}
+		for key, state := range s.anomalyStates {
+			if state.Active == nil && state.LastObserved.Before(oldest) {
+				delete(s.anomalyStates, key)
+			}
+		}
+	}
 }
 
 func (s *MemoryStore) QuerySnapshots(ctx context.Context, q Query) (Page, error) {

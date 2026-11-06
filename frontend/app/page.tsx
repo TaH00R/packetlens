@@ -1,13 +1,15 @@
 
 "use client";
 
+import AnomalyFeed from "@/components/analytics/AnomalyFeed";
+
 import PersistedOverview from "@/components/analytics/PersistedOverview";
 import ProbeFeed from "@/components/dashboard/ProbeFeed";
 import TargetLatencyChart from "@/components/dashboard/TargetLatencyChart";
 import { useMonitoring } from "@/context/MonitoringContext";
 
 export default function Home() {
-  const { history } = useMonitoring();
+  const { history, anomalies } = useMonitoring();
 
   const probeHistory = history.flatMap((snapshot) => [
     ...snapshot.tcp,
@@ -31,9 +33,10 @@ export default function Home() {
       </section>
 
       <PersistedOverview />
+      <AnomalyFeed />
       <section>
         <p className="mb-3 text-xs text-gray-400">The following target chart and live activity use up to 1,000 recent cached cycles within the selection.</p>
-        <TargetLatencyChart results={history} />
+        <TargetLatencyChart results={history} anomalies={anomalies.data?.anomalies} />
       </section>
       <ProbeFeed results={probeHistory} />
 

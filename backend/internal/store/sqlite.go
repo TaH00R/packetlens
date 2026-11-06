@@ -13,18 +13,29 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/TaH00R/packetlens/backend/internal/anomaly"
 	"github.com/TaH00R/packetlens/backend/internal/monitor"
 )
 
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-type SQLiteStore struct{ db *sql.DB }
+type SQLiteStore struct {
+	db            *sql.DB
+	anomalyConfig anomaly.Config
+}
 
 var _ Store = (*SQLiteStore)(nil)
 
 // OpenSQLite accepts a filesystem path, not a caller-supplied SQLite DSN.
 func OpenSQLite(ctx context.Context, path string) (*SQLiteStore, error) {
+	return OpenSQLiteWithAnomalies(ctx, path, anomaly.DefaultConfig())
+}
+
+func OpenSQLiteWithAnomalies(ctx context.Context, path string, cfg anomaly.Config) (*SQLiteStore, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(path) == "" {
 		return nil, fmt.Errorf("database path must not be empty")
 	}
@@ -54,7 +65,7 @@ func OpenSQLite(ctx context.Context, path string) (*SQLiteStore, error) {
 	// permits these bounded concurrent readers alongside collection and cleanup.
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
-	s := &SQLiteStore{db: db}
+	s := &SQLiteStore{db: db, anomalyConfig: cfg}
 	if err := s.initialize(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -85,6 +96,9 @@ func (s *SQLiteStore) initialize(ctx context.Context) error {
 	var version int
 	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fmt.Errorf("read schema version: %w", err)
+	}
+	if version < 0 {
+		return fmt.Errorf("invalid database schema version %d", version)
 	}
 	if version > len(entries) {
 		return fmt.Errorf("database schema version %d is newer than supported version %d", version, len(entries))
@@ -130,6 +144,9 @@ func (s *SQLiteStore) SaveSnapshot(ctx context.Context, snapshot monitor.Snapsho
 		for _, p := range probes {
 			if _, err := stmt.ExecContext(ctx, snapshot.ID, ordinal, p.Type, p.Target, p.LatencyMs, p.Success, p.Error, formatTime(p.Timestamp)); err != nil {
 				return snapshot, fmt.Errorf("insert probe result: %w", err)
+			}
+			if err := s.processAnomaly(ctx, tx, snapshot, ordinal, p); err != nil {
+				return snapshot, err
 			}
 			ordinal++
 		}
@@ -296,12 +313,30 @@ func (s *SQLiteStore) Stats(ctx context.Context, f Filter) (Statistics, error) {
 // DeleteBefore bounds each cleanup transaction and cascades probe deletion.
 // Rows exactly at the retention boundary are retained.
 func (s *SQLiteStore) DeleteBefore(ctx context.Context, before time.Time) (int64, error) {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM snapshots WHERE id IN
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `DELETE FROM snapshots WHERE id IN
 		(SELECT id FROM snapshots WHERE timestamp < ? ORDER BY timestamp, id LIMIT ?)`, formatTime(before), CleanupBatchSize)
 	if err != nil {
 		return 0, fmt.Errorf("delete expired snapshots: %w", err)
 	}
-	return result.RowsAffected()
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM anomaly_state WHERE rowid IN (SELECT rowid FROM anomaly_state WHERE active_id IS NULL AND last_observed < ? LIMIT ?)`, formatTime(before), CleanupBatchSize); err != nil {
+		return 0, fmt.Errorf("clean up detector state: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM latency_anomalies WHERE id IN (SELECT id FROM latency_anomalies WHERE recovery_cycle < ? ORDER BY recovery_cycle LIMIT ?)`, formatTime(before), CleanupBatchSize); err != nil {
+		return 0, fmt.Errorf("clean up recovered anomalies: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func (s *SQLiteStore) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
