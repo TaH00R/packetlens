@@ -2,6 +2,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+
 import {
   CartesianGrid,
   Line,
@@ -17,8 +18,12 @@ import type {
   ProbeResult,
 } from "@/types/metrics";
 
+type ProbeType = "tcp" | "dns";
+
 interface Props {
   results: MonitoringSnapshot[];
+  initialType?: ProbeType;
+  availableTypes?: ProbeType[];
 }
 
 const COLORS = [
@@ -30,12 +35,18 @@ const COLORS = [
   "#22C55E",
 ];
 
-type ProbeType = "tcp" | "dns";
+export default function TargetLatencyChart({
+  results,
+  initialType = "tcp",
+  availableTypes = ["tcp", "dns"],
+}: Props) {
+  const [probeType, setProbeType] =
+    useState<ProbeType>(initialType);
 
-export default function TargetLatencyChart({ results }: Props) {
-  const [probeType, setProbeType] = useState<ProbeType>("tcp");
-
-  const recent = results.slice(-60);
+  const recent = useMemo(
+    () => results.slice(-60),
+    [results]
+  );
 
   const targets = useMemo(() => {
     const unique = new Set<string>();
@@ -44,7 +55,9 @@ export default function TargetLatencyChart({ results }: Props) {
       const probes =
         probeType === "tcp" ? snapshot.tcp : snapshot.dns;
 
-      probes.forEach((probe) => unique.add(probe.target));
+      probes.forEach((probe) => {
+        unique.add(probe.target);
+      });
     });
 
     return Array.from(unique);
@@ -55,15 +68,22 @@ export default function TargetLatencyChart({ results }: Props) {
       const probes: ProbeResult[] =
         probeType === "tcp" ? snapshot.tcp : snapshot.dns;
 
-      const point: Record<string, string | number | null> = {
+      const point: Record<
+        string,
+        string | number | null
+      > = {
         timestamp: new Date(snapshot.timestamp).getTime(),
       };
 
       targets.forEach((target) => {
-        const result = probes.find((probe) => probe.target === target);
+        const result = probes.find(
+          (probe) => probe.target === target
+        );
 
         point[target] =
-          result && result.success ? result.latency_ms : null;
+          result && result.success
+            ? result.latency_ms
+            : null;
       });
 
       return point;
@@ -72,21 +92,25 @@ export default function TargetLatencyChart({ results }: Props) {
 
   return (
     <section className="rounded-xl border border-white/[0.07] bg-[#111820]">
+      {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.07] p-5">
         <div>
           <h3 className="font-medium text-white">
             Target latency
           </h3>
+
           <p className="mt-1 text-xs text-gray-500">
             Compare latency across individual destinations
           </p>
         </div>
 
+        {/* Probe type selector */}
         <div className="flex rounded-lg border border-white/[0.08] bg-[#0B1016] p-1">
-          {(["tcp", "dns"] as const).map((type) => (
+          {availableTypes.map((type) => (
             <button
               key={type}
               onClick={() => setProbeType(type)}
+              aria-pressed={probeType === type}
               className={`rounded-md px-4 py-2 text-xs font-medium uppercase transition-colors ${
                 probeType === type
                   ? "bg-teal-500/15 text-teal-400"
@@ -99,6 +123,7 @@ export default function TargetLatencyChart({ results }: Props) {
         </div>
       </div>
 
+      {/* Chart content */}
       <div className="p-5">
         {targets.length === 0 ? (
           <div className="flex h-[300px] items-center justify-center text-sm text-gray-500">
@@ -106,6 +131,7 @@ export default function TargetLatencyChart({ results }: Props) {
           </div>
         ) : (
           <>
+            {/* Target legend */}
             <div className="mb-5 flex flex-wrap gap-4">
               {targets.map((target, index) => (
                 <div
@@ -115,14 +141,17 @@ export default function TargetLatencyChart({ results }: Props) {
                   <span
                     className="h-2 w-2 rounded-full"
                     style={{
-                      backgroundColor: COLORS[index % COLORS.length],
+                      backgroundColor:
+                        COLORS[index % COLORS.length],
                     }}
                   />
+
                   {target}
                 </div>
               ))}
             </div>
 
+            {/* Latency chart */}
             <div className="h-[300px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart
@@ -145,25 +174,33 @@ export default function TargetLatencyChart({ results }: Props) {
                     type="number"
                     scale="time"
                     domain={["dataMin", "dataMax"]}
-                    tickFormatter={(value) =>
+                    tickFormatter={(value: number) =>
                       new Date(value).toLocaleTimeString([], {
                         hour: "2-digit",
                         minute: "2-digit",
                         second: "2-digit",
                       })
                     }
-                    tick={{ fill: "#8492a6", fontSize: 11 }}
+                    tick={{
+                      fill: "#8492a6",
+                      fontSize: 11,
+                    }}
                     axisLine={false}
                     tickLine={false}
                     minTickGap={35}
                   />
 
                   <YAxis
-                    tick={{ fill: "#8492a6", fontSize: 11 }}
+                    tick={{
+                      fill: "#8492a6",
+                      fontSize: 11,
+                    }}
                     axisLine={false}
                     tickLine={false}
                     width={45}
-                    tickFormatter={(value) => `${value} ms`}
+                    tickFormatter={(value: number) =>
+                      `${value} ms`
+                    }
                   />
 
                   <Tooltip
@@ -174,10 +211,14 @@ export default function TargetLatencyChart({ results }: Props) {
                       color: "#fff",
                     }}
                     labelFormatter={(value) =>
-                      new Date(Number(value)).toLocaleTimeString()
+                      new Date(
+                        Number(value)
+                      ).toLocaleTimeString()
                     }
                     formatter={(value, name) => [
-                      value == null ? "No measurement" : `${value} ms`,
+                      value == null
+                        ? "No measurement"
+                        : `${value} ms`,
                       String(name),
                     ]}
                   />
@@ -188,7 +229,9 @@ export default function TargetLatencyChart({ results }: Props) {
                       type="monotone"
                       dataKey={target}
                       name={target}
-                      stroke={COLORS[index % COLORS.length]}
+                      stroke={
+                        COLORS[index % COLORS.length]
+                      }
                       strokeWidth={2}
                       dot={false}
                       activeDot={{ r: 4 }}
