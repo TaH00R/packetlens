@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TaH00R/packetlens/backend/internal/anomaly"
 	"github.com/TaH00R/packetlens/backend/internal/monitor"
 )
 
@@ -72,7 +74,7 @@ func TestSQLitePersistsAndMigrates(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
 		t.Fatal(err)
 	}
-	if version != 2 || foreignKeys != 1 {
+	if version != 3 || foreignKeys != 1 {
 		t.Fatalf("version=%d foreign_keys=%d", version, foreignKeys)
 	}
 	for _, name := range []string{"snapshots_timestamp_id", "probe_results_timestamp", "probe_results_target_type", "probe_results_type"} {
@@ -358,6 +360,61 @@ func TestUpgradeVersionOnePreservesHistory(t *testing.T) {
 	feed, err := s.QueryAnomalies(context.Background(), AnomalyQuery{})
 	if err != nil || len(feed.Events) != 0 {
 		t.Fatal("migration invented retrospective anomalies")
+	}
+}
+
+func TestUpgradeVersionTwoPreservesAnomalies(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v2.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"001_snapshots.sql", "002_anomalies.sql"} {
+		body, err := migrations.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(string(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at := time.Now().UTC()
+	snapshotID := fmt.Sprintf("%032x", 1)
+	if _, err := db.Exec("INSERT INTO snapshots(id,timestamp) VALUES (?,?)", snapshotID, formatTime(at)); err != nil {
+		t.Fatal(err)
+	}
+	e := anomaly.Event{ID: snapshotID + "-0", Type: "tcp", Target: "a", Timestamp: at, CycleTimestamp: at, LastAnomalyAt: at, LastObservedAt: at, ObservedLatency: 100, PeakLatency: 100, Baseline: 10, MAD: 0, Threshold: 20, Severity: "critical", AnomalousSamples: 1, Method: "rolling-median-mad-v1", Policy: anomaly.DefaultConfig(), BaselineSamples: 20}
+	body, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO latency_anomalies(id,type,target,cycle_timestamp,document) VALUES (?,?,?,?,?)", e.ID, e.Type, e.Target, formatTime(at), string(body)); err != nil {
+		t.Fatal(err)
+	}
+	state, err := json.Marshal(anomaly.State{Active: &e, LastObserved: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO anomaly_state(type,target,last_observed,active_id,document) VALUES (?,?,?,?,?); PRAGMA user_version=2", e.Type, e.Target, formatTime(at), e.ID, string(state)); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := OpenSQLite(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	old, err := s.QueryAnomalies(context.Background(), AnomalyQuery{})
+	if err != nil || len(old.Events) != 1 || old.Events[0].ID != e.ID {
+		t.Fatal("incident migration changed existing anomaly history")
+	}
+	incidents, err := s.QueryIncidents(context.Background(), IncidentQuery{})
+	if err != nil || len(incidents.Events) != 0 {
+		t.Fatal("migration invented incident history")
+	}
+	var version int
+	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 3 {
+		t.Fatal("incident migration was not recorded")
 	}
 }
 

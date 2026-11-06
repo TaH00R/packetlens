@@ -7,10 +7,11 @@ Use it only for destinations you own or are authorized to monitor.
 
 ## Features
 
-- Overview, TCP Analytics, DNS Analytics, Network Health, and a metrics guide.
+- Overview, TCP Analytics, DNS Analytics, Network Health, Failure Incidents, and a metrics guide.
 - Exact P50/P90/P95/P99 successful latencies, distributions, target comparisons, and prior-period comparisons.
 - Per-target mean and latest-pair jitter, with historical trends.
 - Persistent rolling median/MAD anomaly episodes, duplicate suppression, a feed, and chart markers.
+- Sustained-failure incidents, confirmed recovery, elapsed spans, and a dedicated incident timeline.
 - Observed availability for 1h, 24h, 7d, and 30d, with outcome streaks and timestamps.
 - Aggregate and per-target latency charts; failures appear as gaps.
 - Global ranges: last 5 minutes, 15 minutes, hour, 6 hours, 24 hours, or All.
@@ -39,6 +40,7 @@ packetlens/
 |   |-- internal/
 |   |   |-- analytics/    # Persisted latency, jitter, and availability
 |   |   |-- anomaly/      # Pure rolling median/MAD detector and episode policy
+|   |   |-- incident/     # Sustained observed failure and recovery state machine
 |   |   |-- api/          # HTTP and WebSocket handlers
 |   |   |-- monitor/      # Complete monitoring cycles and types
 |   |   |-- probe/        # TCP and DNS checks
@@ -180,6 +182,7 @@ JSON error with status 503. Health also returns 503 when the database is unreach
 | GET | `/api/stats` | `total_results`, `probes` (statistics by type) |
 | GET | `/api/analytics` | Full-range latency, jitter, histogram, trends, previous period |
 | GET | `/api/anomalies` | Bounded, filtered anomaly episode feed |
+| GET | `/api/incidents` | Incident history, filtered pages, open/recovered totals |
 | GET | `/api/availability` | Fixed-window observed availability, streaks, last outcomes |
 | GET | `/api/snapshots` | `count`, `snapshots`, `has_more`, `next_cursor` |
 | WebSocket | `/api/ws` | One snapshot per new monitoring cycle |
@@ -432,12 +435,104 @@ include abnormal conditions, slow changes may adapt into the normal baseline,
 and a persistent legitimate step change can remain an open episode because active
 thresholds do not learn that plateau. Thresholds need operator tuning; flags are
 statistical evidence, not causal diagnoses. There is no acknowledgement/reset UI
-in this milestone, and failure-incident detection remains a separate next milestone.
+for latency anomalies. Sustained-failure incidents use the separate lifecycle below.
+
+## Failure incidents and recovery
+
+Schema v3 adds a failure-incident state machine independently for each exact probe
+type and target. Existing snapshots and anomaly state/history are preserved. It
+starts with new observations after the upgrade; it does not invent retrospective
+incidents from earlier raw measurements.
+
+| Variable | Default | Validation |
+| --- | --- | --- |
+| `PACKETLENS_INCIDENT_FAILURE_THRESHOLD` | 3 | Integer 1..1000 |
+| `PACKETLENS_INCIDENT_RECOVERY_THRESHOLD` | 2 | Integer 1..100 |
+| `PACKETLENS_INCIDENT_MAX_GAP` | 30s | Go duration 1s..24h |
+
+These process environment settings are documented in `backend/.env.example`.
+Set the maximum gap above the expected observation interval; otherwise a normal
+interval may reset every multi-probe streak. Invalid settings stop startup. Policy
+is captured when the first failure starts a run: changing settings on restart
+affects new runs while pending/open runs keep their saved policy.
+
+A single failed probe is stored and streamed as usual. It begins a bounded pending
+candidate, not an incident. A success clears that candidate. Reaching the failure
+threshold creates one incident, retaining both the **first failure** (`started_at`)
+and **threshold confirmation** (`detected_at`) timestamps and their snapshot-cycle
+timestamps. Subsequent failed observations update that incident's failed count,
+last failure, and last error. SQLite enforces one open incident per probe type and
+target. Errors in incident records are bounded to 1,024 Unicode code points; raw
+probe errors retain their existing contract.
+
+An open incident recovers only after the required consecutive successful probes.
+A failure resets partial recovery. Success is based on the probe success flag, so
+a slow successful probe can contribute to failure-incident recovery while still
+belonging to a distinct latency anomaly. Recovery records the confirmation probe
+and cycle timestamps. Its `duration_ms` is the elapsed wall-clock span from the
+first failed probe to that confirmation. Open records have null duration and no
+inferred recovery timestamp; a valid zero-duration recovery remains zero.
+
+A gap **strictly longer** than the saved maximum observation gap resets incomplete
+failure and recovery streaks. For an open incident it also records
+`has_monitoring_gaps`, preserving the incident until successful confirmation.
+Missing time is never counted as a failure or success. An incident's elapsed span
+can include unknown periods and does not establish continuous downtime or a root
+cause. The timeline warns about recorded gaps and old last-observation timestamps.
+Older probe timestamps are stored as raw history but do not advance the detector.
+Equal timestamps with distinct observations remain valid.
+
+Pending streaks, open state, recovery progress, raw results, and incident updates
+commit atomically with each snapshot. They survive backend restarts. A failed write
+or invalid persisted state rolls back the entire cycle; errors are logged and live
+raw streaming continues using the existing storage-failure behaviour. No latency
+anomaly or incident transition can partially advance in that failed transaction.
+
+Incidents are retained independently of raw snapshots. Open incidents and their
+state survive raw-history cleanup; missing measurements cannot silently recover
+or delete them. Each cleanup batch can additionally remove up to 500 recovered
+incidents whose recovery cycle predates the retention cutoff and 500 inactive
+incident-state rows older than the cutoff. As with anomaly cleanup, a backlog may
+need subsequent sweeps. Policies and lifecycle details remain attached to retained
+records. There are no manual acknowledgement, closure, or root-cause fields in
+this milestone; lifecycle changes are driven by observed probes.
+
+### Incident API and timeline
+
+`GET /api/incidents` accepts the same `range`, optional `to`, `type`, exact `target`,
+`limit` (1..200, default 50), and `before` parameters as the anomaly feed, plus
+`status=all|open|recovered` (default all). Responses include:
+
+- `range`, `as_of`, and the applied `status` filter.
+- `incidents`, `count`, `has_more`, and `next_cursor` for the current page.
+- `open_count` and `recovered_count` across the whole matching range/type/target,
+  independent of pagination and the status filter.
+
+A read transaction keeps the counts and page consistent. Overlap uses snapshot
+cycles: incidents that started before the upper bound and have not recovered
+before the lower bound qualify. Old open incidents remain visible in recent
+ranges. Ordering is by first-failure cycle, newest first, with ID as the stable tie
+breaker. Preserve filters and `to` when following cursors. Status is the latest
+stored state, including when querying a historical overlap window; this endpoint
+is not an immutable historical event log. Bad parameters return JSON 400, closed
+or failed storage returns generic JSON 503, and reads have a five-second deadline.
+
+The shared context refreshes the newest unfiltered page every 15 seconds and on
+WebSocket reconnection. `/incidents` provides the full timeline, and the overview
+and health pages also include it. Desktop and mobile navigation link to the page.
+The UI distinguishes ongoing/recovered records, shows first failure, detection,
+last failure, recovery progress, confirmed elapsed span, probe errors, and policy.
+Status/probe filters and older/previous/latest controls share pagination logic with
+the anomaly feed. Changing range or filters aborts the old request and resets page
+navigation. Loading, empty, API-error, and stale states are explicit.
+
+Cross-target failure correlation is the next milestone; simultaneous incidents
+currently remain separate observations, with no confirmed shared cause inferred.
 
 ## Dashboard history and time ranges
 
-The shared monitoring context loads persisted analytics and anomalies every 15 seconds
-and availability every minute, also refreshing on WebSocket connection/reconnection.
+The shared monitoring context loads persisted analytics, anomalies, and incidents
+every 15 seconds and availability every minute, also refreshing on WebSocket connection/reconnection.
 All pages consume that shared state. Overview summaries and latency trends,
 TCP/DNS analytics, and health jitter use all retained measurements in the global
 selection. All means all retained SQLite history for these reports. Availability
@@ -507,6 +602,9 @@ availability windows and streaks, large histories, and concurrent reads/writes.
 Anomaly tests cover warmup, zero/nonzero MAD, strict thresholds, failure exclusion,
 episode recovery, restart continuity, atomic rollback, migration from schema v1,
 cursor/filter behaviour, marker counts, and retention of unresolved episodes.
+Incident tests cover isolated failures, failure/recovery thresholds, gaps, frozen
+policy, restart continuity, atomic rollback, migration from v2, identity isolation,
+pagination/count/status contracts, invalid state, and recovered/open retention.
 Tests do not need public internet access.
 
 From `frontend/`:
@@ -523,7 +621,9 @@ DOM for React component tests. Coverage includes nested response validation,
 REST/live merging, time ranges, empty/failed states, formatting, target/window
 selectors, abort cleanup, API errors, and late-response protection. Anomaly tests
 cover response validation, severity/recovery rendering, feed filtering/pagination,
-and visible onset markers. DOM chart
+and visible onset markers. Incident tests verify lifecycle validation/rendering,
+zero-duration recovery, gap warnings, API errors, status/probe filters, pagination,
+and range changes while viewing older pages. DOM chart
 containers have deterministic test dimensions; these tests do not replace visual
 browser verification. The added tools are devDependencies only.
 
@@ -538,6 +638,8 @@ browser verification. The added tools are devDependencies only.
   use bounded concurrency and deadlines; larger deployments may need rollups.
 - Trend buckets average observations and can hide short transient extremes.
 - Availability describes observed probes, not verified continuous service uptime.
+- Incident durations are elapsed observation spans; they can include unknown gaps.
+- Incidents are tracked per target; cross-target correlation is not implemented yet.
 - Stale status appears after 15 seconds without a snapshot. It is a dashboard
   diagnostic and does not establish that the monitored network is down.
 - There is no authentication, target-management UI, CSV export, or full browser

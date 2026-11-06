@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { MonitoringProvider } from "../context/MonitoringContext";
 import AnomalyFeed from "../components/analytics/AnomalyFeed";
 import TrendChart from "../components/analytics/TrendChart";
+import { incidentReport } from "./fixtures/incidents";
 import { anomalyReport,episode } from "./fixtures/anomalies";
 import { availability,report } from "./fixtures/analytics";
 after(()=>dom.window.close());
@@ -14,6 +15,7 @@ test("anomaly feed shows severity and recovery and paginates with real controls"
  const calls:string[]=[];
  t.mock.method(globalThis,"fetch",async(input:RequestInfo|URL)=>{
   const u=new URL(String(input));calls.push(u.toString());
+  if(u.pathname==="/api/incidents") return new Response(JSON.stringify(incidentReport(u.searchParams.get("range") ?? "15m")));
   if(u.pathname==="/api/anomalies"){
    const old=episode(true);old.id="ffffffffffffffffffffffffffffffff-0";old.target="old:443";
    const next=anomalyReport("15m",[u.searchParams.has("before")?old:episode()]);

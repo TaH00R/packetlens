@@ -36,6 +36,7 @@ export default function DashboardShell({ children }: Props) {
           <Link href="/tcp">TCP</Link>
           <Link href="/dns">DNS</Link>
           <Link href="/health">Health</Link>
+          <Link href="/incidents">Incidents</Link>
           <Link href="/learn">Metrics guide</Link>
         </nav>
         {(historyLoading || historyError || stale || status !== "connected") && (

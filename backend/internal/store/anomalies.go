@@ -3,72 +3,18 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/TaH00R/packetlens/backend/internal/anomaly"
 	"github.com/TaH00R/packetlens/backend/internal/monitor"
 )
 
-type AnomalyQuery struct {
-	Filter
-	Limit  int
-	Before string
-}
 type AnomalyPage struct {
 	Events     []anomaly.Event
 	NextCursor string
-}
-
-func validEventID(id string) bool {
-	parts := strings.Split(id, "-")
-	if len(parts) != 2 || !validID(parts[0]) {
-		return false
-	}
-	n, err := strconv.Atoi(parts[1])
-	return err == nil && n >= 0 && n < 1_000_000
-}
-func anomalyCursor(e anomaly.Event) string {
-	b, _ := json.Marshal(cursor{Timestamp: formatTime(e.CycleTimestamp), ID: e.ID})
-	return base64.RawURLEncoding.EncodeToString(b)
-}
-func readAnomalyCursor(value string) (cursor, error) {
-	var c cursor
-	if len(value) > 256 {
-		return c, fmt.Errorf("%w: invalid anomaly cursor", ErrInvalidQuery)
-	}
-	b, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil || json.Unmarshal(b, &c) != nil || !validEventID(c.ID) {
-		return c, fmt.Errorf("%w: invalid anomaly cursor", ErrInvalidQuery)
-	}
-	t, err := time.Parse(timestampLayout, c.Timestamp)
-	if err != nil || t.Year() < 1 || formatTime(t) != c.Timestamp {
-		return c, fmt.Errorf("%w: invalid anomaly cursor", ErrInvalidQuery)
-	}
-	return c, nil
-}
-func (q AnomalyQuery) validate() (AnomalyQuery, error) {
-	if err := q.Filter.Validate(); err != nil {
-		return q, err
-	}
-	if q.Limit == 0 {
-		q.Limit = 50
-	}
-	if q.Limit < 1 || q.Limit > 200 {
-		return q, fmt.Errorf("%w: anomaly limit must be 1..200", ErrInvalidQuery)
-	}
-	if q.Before != "" {
-		if _, err := readAnomalyCursor(q.Before); err != nil {
-			return q, err
-		}
-	}
-	return q, nil
 }
 
 func (s *SQLiteStore) processAnomaly(ctx context.Context, tx *sql.Tx, snapshot monitor.Snapshot, ordinal int, p monitor.ProbeResult) error {
@@ -121,41 +67,15 @@ func (s *SQLiteStore) processAnomaly(ctx context.Context, tx *sql.Tx, snapshot m
 	return nil
 }
 
-func anomalyConditions(f Filter, overlap bool) (string, []any) {
-	where := "1=1"
-	args := []any{}
-	if f.From != nil {
-		if overlap {
-			where += " AND (recovery_cycle IS NULL OR recovery_cycle >= ?)"
-		} else {
-			where += " AND cycle_timestamp >= ?"
-		}
-		args = append(args, formatTime(*f.From))
-	}
-	if f.To != nil {
-		where += " AND cycle_timestamp <= ?"
-		args = append(args, formatTime(*f.To))
-	}
-	if f.Type != "" {
-		where += " AND type=?"
-		args = append(args, f.Type)
-	}
-	if f.Target != "" {
-		where += " AND target=?"
-		args = append(args, f.Target)
-	}
-	return where, args
-}
-
 func (s *SQLiteStore) QueryAnomalies(ctx context.Context, q AnomalyQuery) (AnomalyPage, error) {
 	page := AnomalyPage{Events: []anomaly.Event{}}
 	q, err := q.validate()
 	if err != nil {
 		return page, err
 	}
-	where, args := anomalyConditions(q.Filter, true)
+	where, args := episodeConditions(q.Filter, true)
 	if q.Before != "" {
-		c, _ := readAnomalyCursor(q.Before)
+		c, _ := readEpisodeCursor(q.Before)
 		where += " AND (cycle_timestamp,id)<(?,?)"
 		args = append(args, c.Timestamp, c.ID)
 	}
@@ -184,7 +104,7 @@ func (s *SQLiteStore) QueryAnomalies(ctx context.Context, q AnomalyQuery) (Anoma
 	}
 	if len(page.Events) > q.Limit {
 		page.Events = page.Events[:q.Limit]
-		page.NextCursor = anomalyCursor(page.Events[len(page.Events)-1])
+		page.NextCursor = episodeCursor(page.Events[len(page.Events)-1].CycleTimestamp, page.Events[len(page.Events)-1].ID)
 	}
 	return page, nil
 }
@@ -192,7 +112,7 @@ func (s *SQLiteStore) WalkAnomalyStarts(ctx context.Context, f Filter, visit fun
 	if err := f.Validate(); err != nil {
 		return err
 	}
-	where, args := anomalyConditions(f, false)
+	where, args := episodeConditions(f, false)
 	rows, err := s.db.QueryContext(ctx, "SELECT document FROM latency_anomalies WHERE "+where+" ORDER BY cycle_timestamp,id", args...)
 	if err != nil {
 		return fmt.Errorf("query anomaly markers: %w", err)
@@ -233,7 +153,7 @@ func (s *MemoryStore) QueryAnomalies(ctx context.Context, q AnomalyQuery) (Anoma
 	defer s.mu.RUnlock()
 	var before cursor
 	if q.Before != "" {
-		before, _ = readAnomalyCursor(q.Before)
+		before, _ = readEpisodeCursor(q.Before)
 	}
 	for _, e := range s.anomalyEvents {
 		if q.From != nil && e.RecoveryCycle != nil && e.RecoveryCycle.Before(*q.From) {
@@ -259,7 +179,7 @@ func (s *MemoryStore) QueryAnomalies(ctx context.Context, q AnomalyQuery) (Anoma
 	})
 	if len(page.Events) > q.Limit {
 		page.Events = page.Events[:q.Limit]
-		page.NextCursor = anomalyCursor(page.Events[len(page.Events)-1])
+		page.NextCursor = episodeCursor(page.Events[len(page.Events)-1].CycleTimestamp, page.Events[len(page.Events)-1].ID)
 	}
 	return page, nil
 }

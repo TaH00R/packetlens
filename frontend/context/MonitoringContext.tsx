@@ -14,6 +14,8 @@ import { usePacketLensSocket } from "@/hooks/usePacketLensSocket";
 import { useRemoteReport } from "@/hooks/useRemoteReport";
 import { parseAnomalies } from "@/lib/anomalies";
 import type { AnomalyReport } from "@/types/anomalies";
+import { parseIncidents } from "@/lib/incidents";
+import type { IncidentReport } from "@/types/incidents";
 import { parseAnalytics, parseAvailability } from "@/lib/analytics";
 import type { AnalyticsReport, AvailabilityReport, RemoteReport } from "@/types/analytics";
 
@@ -26,6 +28,8 @@ import { filterHistory, mergeHistory, parseHistory, type TimeRange } from "@/lib
 export type { TimeRange } from "@/lib/monitoring";
 
 interface MonitoringContextType {
+  incidents: RemoteReport<IncidentReport>;
+  incidentsStale: boolean;
   anomalies: RemoteReport<AnomalyReport>;
   anomaliesStale: boolean;
   analytics: RemoteReport<AnalyticsReport>;
@@ -63,6 +67,7 @@ export function MonitoringProvider({
   const [historyError, setHistoryError] = useState<string | null>(null);
 
   const [range, setRange] = useState<TimeRange>("15m");
+  const incidents = useRemoteReport(`/api/incidents?range=${range}&limit=50`, parseIncidents, 15_000, monitoring.connectionVersion);
   const anomalies = useRemoteReport(`/api/anomalies?range=${range}&limit=50`, parseAnomalies, 15_000, monitoring.connectionVersion);
   const analytics = useRemoteReport(`/api/analytics?range=${range}`, parseAnalytics, 15_000, monitoring.connectionVersion);
   const availability = useRemoteReport("/api/availability", parseAvailability, 60_000, monitoring.connectionVersion);
@@ -144,11 +149,14 @@ export function MonitoringProvider({
   const stale = latest !== null && now - Date.parse(latest.timestamp) > 15_000;
 
   const analyticsStale = analytics.data !== null && now - Date.parse(analytics.data.as_of) > 45_000;
+  const incidentsStale = incidents.data !== null && now - Date.parse(incidents.data.as_of) > 45_000;
   const anomaliesStale = anomalies.data !== null && now - Date.parse(anomalies.data.as_of) > 45_000;
   const availabilityStale = availability.data !== null && now - Date.parse(availability.data.as_of) > 120_000;
 
   const value = useMemo(
     () => ({
+      incidents,
+      incidentsStale,
       anomalies,
       anomaliesStale,
       analytics,
@@ -167,6 +175,8 @@ export function MonitoringProvider({
       reconnect: monitoring.reconnect,
     }),
     [
+      incidents,
+      incidentsStale,
       anomalies,
       anomaliesStale,
       analytics,

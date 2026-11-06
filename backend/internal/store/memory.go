@@ -7,16 +7,19 @@ import (
 	"time"
 
 	"github.com/TaH00R/packetlens/backend/internal/anomaly"
+	"github.com/TaH00R/packetlens/backend/internal/incident"
 	"github.com/TaH00R/packetlens/backend/internal/monitor"
 )
 
 type MemoryStore struct {
-	mu            sync.RWMutex
-	snapshots     []monitor.Snapshot
-	capacity      int
-	closed        bool
-	anomalyStates map[string]anomaly.State
-	anomalyEvents map[string]anomaly.Event
+	mu             sync.RWMutex
+	snapshots      []monitor.Snapshot
+	capacity       int
+	closed         bool
+	anomalyStates  map[string]anomaly.State
+	anomalyEvents  map[string]anomaly.Event
+	incidentStates map[string]incident.State
+	incidents      map[string]incident.Event
 }
 
 var _ Store = (*MemoryStore)(nil)
@@ -48,6 +51,11 @@ func (s *MemoryStore) SaveSnapshot(ctx context.Context, snapshot monitor.Snapsho
 			if event != nil {
 				s.anomalyEvents[event.ID] = *event
 			}
+			iState, iEvent := incident.Process(s.incidentStates[key], incident.DefaultConfig(), snapshot.ID, ordinal, snapshot.Timestamp, p)
+			s.incidentStates[key] = iState
+			if iEvent != nil {
+				s.incidents[iEvent.ID] = *iEvent
+			}
 			ordinal++
 		}
 	}
@@ -61,6 +69,7 @@ func NewMemoryStore(capacity int) *MemoryStore {
 	}
 
 	return &MemoryStore{
+		incidentStates: make(map[string]incident.State), incidents: make(map[string]incident.Event),
 		anomalyStates: make(map[string]anomaly.State), anomalyEvents: make(map[string]anomaly.Event),
 		snapshots: make([]monitor.Snapshot, 0, capacity),
 		capacity:  capacity,
@@ -83,6 +92,16 @@ func (s *MemoryStore) addSnapshot(snapshot monitor.Snapshot) {
 	// Closed detector records follow the test/development raw-history window.
 	if len(s.snapshots) > 0 {
 		oldest := s.snapshots[0].Timestamp
+		for id, event := range s.incidents {
+			if event.RecoveryCycle != nil && event.RecoveryCycle.Before(oldest) {
+				delete(s.incidents, id)
+			}
+		}
+		for key, state := range s.incidentStates {
+			if state.Active == nil && state.LastObserved.Before(oldest) {
+				delete(s.incidentStates, key)
+			}
+		}
 		for id, event := range s.anomalyEvents {
 			if event.RecoveryCycle != nil && event.RecoveryCycle.Before(oldest) {
 				delete(s.anomalyEvents, id)

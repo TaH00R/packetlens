@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 
 import {
   Activity,
+  AlertTriangle,
   BookOpen,
   Globe,
   LayoutDashboard,
@@ -18,6 +19,7 @@ const navigation = [
   { label: "TCP Analytics", icon: Network, href: "/tcp" },
   { label: "DNS Analytics", icon: Globe, href: "/dns" },
   { label: "Network Health", icon: Activity, href: "/health" },
+  { label: "Failure Incidents", icon: AlertTriangle, href: "/incidents" },
 ];
 
 export default function DashboardSidebar() {

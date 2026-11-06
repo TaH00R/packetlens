@@ -2,10 +2,12 @@ package config
 
 import (
 	"fmt"
-	"github.com/TaH00R/packetlens/backend/internal/anomaly"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/TaH00R/packetlens/backend/internal/anomaly"
+	"github.com/TaH00R/packetlens/backend/internal/incident"
 )
 
 type Config struct {
@@ -13,6 +15,7 @@ type Config struct {
 	Retention       time.Duration
 	CleanupInterval time.Duration
 	Anomaly         anomaly.Config
+	Incident        incident.Config
 }
 
 // Load accepts an environment lookup so validation can be tested without
@@ -72,6 +75,30 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		c.Anomaly.MaxAge = duration
 	}
 	if err := c.Anomaly.Validate(); err != nil {
+		return c, err
+	}
+	c.Incident = incident.DefaultConfig()
+	for _, field := range []struct {
+		key         string
+		destination *int
+	}{{"FAILURE_THRESHOLD", &c.Incident.FailureThreshold}, {"RECOVERY_THRESHOLD", &c.Incident.RecoveryThreshold}} {
+		key := "PACKETLENS_INCIDENT_" + field.key
+		if value, ok := lookup(key); ok {
+			n, err := strconv.Atoi(strings.TrimSpace(value))
+			if err != nil {
+				return c, fmt.Errorf("%s must be an integer", key)
+			}
+			*field.destination = n
+		}
+	}
+	if value, ok := lookup("PACKETLENS_INCIDENT_MAX_GAP"); ok {
+		gap, err := time.ParseDuration(strings.TrimSpace(value))
+		if err != nil {
+			return c, fmt.Errorf("PACKETLENS_INCIDENT_MAX_GAP must be a duration")
+		}
+		c.Incident.MaxGap = gap
+	}
+	if err := c.Incident.Validate(); err != nil {
 		return c, err
 	}
 	return c, nil

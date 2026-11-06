@@ -36,7 +36,7 @@ func run() error {
 		return err
 	}
 	startupCtx, startupCancel := context.WithTimeout(ctx, 15*time.Second)
-	database, err := store.OpenSQLiteWithAnomalies(startupCtx, cfg.DatabasePath, cfg.Anomaly)
+	database, err := store.OpenSQLiteWithDetectors(startupCtx, cfg.DatabasePath, cfg.Anomaly, cfg.Incident)
 	startupCancel()
 	if err != nil {
 		return err
@@ -49,6 +49,7 @@ func run() error {
 
 	hub := realtime.NewHub()
 	log.Printf("History database: %s | retention=%s | cleanup=%s", cfg.DatabasePath, cfg.Retention, cfg.CleanupInterval)
+	log.Printf("Failure incident detector | failure_threshold=%d | recovery_threshold=%d | maximum_observation_gap=%s", cfg.Incident.FailureThreshold, cfg.Incident.RecoveryThreshold, cfg.Incident.MaxGap)
 	log.Printf("Latency anomaly detector | window=%d | minimum_samples=%d | mad_multiplier=%g | minimum_delta_ms=%g | baseline_max_age=%s | recovery_successes=%d", cfg.Anomaly.Window, cfg.Anomaly.MinSamples, cfg.Anomaly.Multiplier, cfg.Anomaly.MinDeltaMs, cfg.Anomaly.MaxAge, cfg.Anomaly.RecoverySamples)
 
 	m := monitor.NewMonitor(

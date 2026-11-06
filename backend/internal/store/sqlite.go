@@ -14,6 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/TaH00R/packetlens/backend/internal/anomaly"
+	"github.com/TaH00R/packetlens/backend/internal/incident"
 	"github.com/TaH00R/packetlens/backend/internal/monitor"
 )
 
@@ -21,8 +22,9 @@ import (
 var migrations embed.FS
 
 type SQLiteStore struct {
-	db            *sql.DB
-	anomalyConfig anomaly.Config
+	db             *sql.DB
+	anomalyConfig  anomaly.Config
+	incidentConfig incident.Config
 }
 
 var _ Store = (*SQLiteStore)(nil)
@@ -33,6 +35,13 @@ func OpenSQLite(ctx context.Context, path string) (*SQLiteStore, error) {
 }
 
 func OpenSQLiteWithAnomalies(ctx context.Context, path string, cfg anomaly.Config) (*SQLiteStore, error) {
+	return OpenSQLiteWithDetectors(ctx, path, cfg, incident.DefaultConfig())
+}
+
+func OpenSQLiteWithDetectors(ctx context.Context, path string, cfg anomaly.Config, incidents incident.Config) (*SQLiteStore, error) {
+	if err := incidents.Validate(); err != nil {
+		return nil, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -65,7 +74,7 @@ func OpenSQLiteWithAnomalies(ctx context.Context, path string, cfg anomaly.Confi
 	// permits these bounded concurrent readers alongside collection and cleanup.
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
-	s := &SQLiteStore{db: db, anomalyConfig: cfg}
+	s := &SQLiteStore{db: db, anomalyConfig: cfg, incidentConfig: incidents}
 	if err := s.initialize(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -146,6 +155,9 @@ func (s *SQLiteStore) SaveSnapshot(ctx context.Context, snapshot monitor.Snapsho
 				return snapshot, fmt.Errorf("insert probe result: %w", err)
 			}
 			if err := s.processAnomaly(ctx, tx, snapshot, ordinal, p); err != nil {
+				return snapshot, err
+			}
+			if err := s.processIncident(ctx, tx, snapshot, ordinal, p); err != nil {
 				return snapshot, err
 			}
 			ordinal++
@@ -332,6 +344,12 @@ func (s *SQLiteStore) DeleteBefore(ctx context.Context, before time.Time) (int64
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM latency_anomalies WHERE id IN (SELECT id FROM latency_anomalies WHERE recovery_cycle < ? ORDER BY recovery_cycle LIMIT ?)`, formatTime(before), CleanupBatchSize); err != nil {
 		return 0, fmt.Errorf("clean up recovered anomalies: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM incident_state WHERE rowid IN (SELECT rowid FROM incident_state WHERE active_id IS NULL AND last_observed < ? LIMIT ?)`, formatTime(before), CleanupBatchSize); err != nil {
+		return 0, fmt.Errorf("clean up incident state: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM incidents WHERE id IN (SELECT id FROM incidents WHERE recovery_cycle < ? ORDER BY recovery_cycle LIMIT ?)`, formatTime(before), CleanupBatchSize); err != nil {
+		return 0, fmt.Errorf("clean up recovered incidents: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err

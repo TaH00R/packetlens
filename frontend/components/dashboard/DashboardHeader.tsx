@@ -20,6 +20,7 @@ export default function DashboardHeader({
     "/tcp": "TCP Analytics",
     "/dns": "DNS Analytics",
     "/health": "Network Health",
+    "/incidents": "Failure Incidents",
     "/learn": "Understanding Metrics",
   };
 

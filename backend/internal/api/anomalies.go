@@ -1,26 +1,23 @@
 package api
 
 import (
-"context"
-"net/http"
-"net/url"
-"time"
+	"context"
+	"fmt"
+	"net/http"
+	"net/url"
+	"time"
 
-"github.com/TaH00R/packetlens/backend/internal/analytics"
-"github.com/TaH00R/packetlens/backend/internal/store"
+	"github.com/TaH00R/packetlens/backend/internal/analytics"
+	"github.com/TaH00R/packetlens/backend/internal/store"
 )
 
-func (h *Handler) Anomalies(w http.ResponseWriter, r *http.Request) {
-	if !requireGET(w, r) {
-		return
-	}
+// Episode feeds share range bounds, probe filters, and keyset pagination.
+func parseEpisodeQuery(r *http.Request) (store.EpisodeQuery, string, time.Time, error) {
 	values, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
-		queryError(w, err)
-		return
+		return store.EpisodeQuery{}, "", time.Time{}, err
 	}
-	rangeValues := url.Values{}
-	queryValues := url.Values{}
+	rangeValues, queryValues := url.Values{}, url.Values{}
 	for key, entries := range values {
 		if key == "range" || key == "to" {
 			rangeValues[key] = entries
@@ -34,8 +31,7 @@ func (h *Handler) Anomalies(w http.ResponseWriter, r *http.Request) {
 	clone.URL.RawQuery = rangeValues.Encode()
 	selected, to, err := analyticsQuery(clone, true)
 	if err != nil {
-		queryError(w, err)
-		return
+		return store.EpisodeQuery{}, selected, to, err
 	}
 	if _, ok := queryValues["limit"]; !ok {
 		queryValues.Set("limit", "50")
@@ -43,22 +39,31 @@ func (h *Handler) Anomalies(w http.ResponseWriter, r *http.Request) {
 	clone.URL.RawQuery = queryValues.Encode()
 	q, err := parseQuery(clone, true)
 	if err != nil {
-		queryError(w, err)
-		return
+		return store.EpisodeQuery{}, selected, to, err
 	}
-	// The range selector owns time bounds; a second independent from is invalid.
 	if q.From != nil || q.To != nil {
-		queryError(w, store.ErrInvalidQuery)
-		return
+		return store.EpisodeQuery{}, selected, to, fmt.Errorf("%w: episode time bounds use range and to", store.ErrInvalidQuery)
 	}
 	q.To = &to
 	if selected != "all" {
 		from := to.Add(-analytics.Ranges[selected])
 		q.From = &from
 	}
+	return store.EpisodeQuery{Filter: q.Filter, Limit: q.Limit, Before: q.Before}, selected, to, nil
+}
+
+func (h *Handler) Anomalies(w http.ResponseWriter, r *http.Request) {
+	if !requireGET(w, r) {
+		return
+	}
+	q, selected, to, err := parseEpisodeQuery(r)
+	if err != nil {
+		queryError(w, err)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	page, err := h.store.QueryAnomalies(ctx, store.AnomalyQuery{Filter: q.Filter, Limit: q.Limit, Before: q.Before})
+	page, err := h.store.QueryAnomalies(ctx, q)
 	if err != nil {
 		storageError(w, r, err)
 		return

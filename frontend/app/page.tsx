@@ -2,6 +2,7 @@
 "use client";
 
 import AnomalyFeed from "@/components/analytics/AnomalyFeed";
+import IncidentTimeline from "@/components/analytics/IncidentTimeline";
 
 import PersistedOverview from "@/components/analytics/PersistedOverview";
 import ProbeFeed from "@/components/dashboard/ProbeFeed";
@@ -33,6 +34,7 @@ export default function Home() {
       </section>
 
       <PersistedOverview />
+      <IncidentTimeline />
       <AnomalyFeed />
       <section>
         <p className="mb-3 text-xs text-gray-400">The following target chart and live activity use up to 1,000 recent cached cycles within the selection.</p>

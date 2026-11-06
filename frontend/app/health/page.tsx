@@ -1,6 +1,7 @@
 "use client";
 
 import AnomalyFeed from "@/components/analytics/AnomalyFeed";
+import IncidentTimeline from "@/components/analytics/IncidentTimeline";
 
 import AvailabilityPanel from "@/components/analytics/AvailabilityPanel";
 import JitterHealth from "@/components/analytics/JitterHealth";
@@ -9,6 +10,7 @@ export default function NetworkHealthPage() {
   return (
     <div className="mx-auto max-w-[1550px] space-y-7 p-5 sm:p-8">
       <section><h1 className="text-3xl font-semibold">Network Health</h1><p className="mt-2 text-sm text-gray-400">Observed probe availability and per-target latency consistency.</p></section>
+      <IncidentTimeline />
       <AvailabilityPanel />
       <JitterHealth />
       <AnomalyFeed />
