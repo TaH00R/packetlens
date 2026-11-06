@@ -45,11 +45,16 @@ func main() {
 	go func() {
 		defer collector.Done()
 
-		for result := range m.Results {
-			memoryStore.Add(result)
-			hub.Publish(result)
+		for snapshot := range m.Results {
+			memoryStore.AddSnapshot(snapshot)
+			hub.Publish(snapshot)
 
-			log.Printf("[PROBE] %+v", result)
+			log.Printf(
+				"[SNAPSHOT] TCP: %d | DNS: %d | Time: %s",
+				len(snapshot.TCP),
+				len(snapshot.DNS),
+				snapshot.Timestamp.Format(time.RFC3339),
+			)
 		}
 	}()
 

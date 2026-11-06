@@ -7,7 +7,7 @@ import (
 )
 
 type Client struct {
-	Send chan monitor.ProbeResult
+	Send chan monitor.Snapshot
 }
 
 type Hub struct {
@@ -23,7 +23,7 @@ func NewHub() *Hub {
 
 func (h *Hub) Register() *Client {
 	client := &Client{
-		Send: make(chan monitor.ProbeResult, 64),
+		Send: make(chan monitor.Snapshot, 64),
 	}
 
 	h.mu.Lock()
@@ -43,15 +43,14 @@ func (h *Hub) Unregister(client *Client) {
 	}
 }
 
-func (h *Hub) Publish(result monitor.ProbeResult) {
+func (h *Hub) Publish(snapshot monitor.Snapshot) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	for client := range h.clients {
 		select {
-		case client.Send <- result:
+		case client.Send <- snapshot:
 		default:
-			// Disconnect clients that cannot keep up.
 			delete(h.clients, client)
 			close(client.Send)
 		}

@@ -22,6 +22,7 @@ func NewServer(
 	mux.HandleFunc("/api/metrics", handler.Metrics)
 	mux.HandleFunc("/api/stats", handler.Stats)
 	mux.Handle("/api/ws", wsHandler)
+	mux.HandleFunc("/api/snapshots", handler.Snapshots)
 
 	return &http.Server{
 		Addr:              ":8080",

@@ -45,6 +45,21 @@ func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Snapshots returns complete monitoring cycles.
+func (h *Handler) Snapshots(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	snapshots := h.store.GetSnapshots()
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"count":     len(snapshots),
+		"snapshots": snapshots,
+	})
+}
+
 type ProbeStats struct {
 	Total      int     `json:"total"`
 	Successful int     `json:"successful"`
@@ -61,7 +76,6 @@ func (h *Handler) Stats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := h.store.GetAll()
-
 	stats := make(map[string]*ProbeStats)
 
 	for _, result := range results {
@@ -76,7 +90,6 @@ func (h *Handler) Stats(w http.ResponseWriter, r *http.Request) {
 
 		if result.Success {
 			s.Successful++
-
 			s.AvgLatency += result.LatencyMs
 
 			if s.Successful == 1 || result.LatencyMs < s.MinLatency {

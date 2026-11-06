@@ -12,7 +12,7 @@ type Monitor struct {
 	Interval time.Duration
 	Targets  []string
 	Domains  []string
-	Results  chan ProbeResult
+	Results  chan Snapshot
 }
 
 func NewMonitor(
@@ -24,7 +24,7 @@ func NewMonitor(
 		Interval: interval,
 		Targets:  targets,
 		Domains:  domains,
-		Results:  make(chan ProbeResult, 100),
+		Results:  make(chan Snapshot, 100),
 	}
 }
 
@@ -47,6 +47,10 @@ func (m *Monitor) Start(ctx context.Context) {
 }
 
 func (m *Monitor) runProbes(ctx context.Context) {
+	total := len(m.Targets) + len(m.Domains)
+
+	results := make(chan ProbeResult, total)
+
 	var wg sync.WaitGroup
 
 	for _, target := range m.Targets {
@@ -57,18 +61,13 @@ func (m *Monitor) runProbes(ctx context.Context) {
 
 			result := probe.CheckTCP(ctx, target)
 
-			probeResult := ProbeResult{
+			results <- ProbeResult{
 				Type:      "tcp",
 				Target:    result.Target,
 				LatencyMs: result.LatencyMs,
 				Success:   result.Success,
 				Error:     result.Error,
 				Timestamp: time.Now(),
-			}
-
-			select {
-			case m.Results <- probeResult:
-			case <-ctx.Done():
 			}
 		}(target)
 	}
@@ -81,7 +80,7 @@ func (m *Monitor) runProbes(ctx context.Context) {
 
 			result := probe.CheckDNS(ctx, domain)
 
-			probeResult := ProbeResult{
+			results <- ProbeResult{
 				Type:      "dns",
 				Target:    result.Domain,
 				LatencyMs: result.LatencyMs,
@@ -89,13 +88,29 @@ func (m *Monitor) runProbes(ctx context.Context) {
 				Error:     result.Error,
 				Timestamp: time.Now(),
 			}
-
-			select {
-			case m.Results <- probeResult:
-			case <-ctx.Done():
-			}
 		}(domain)
 	}
 
 	wg.Wait()
+	close(results)
+
+	snapshot := Snapshot{
+		Timestamp: time.Now(),
+		TCP:       make([]ProbeResult, 0),
+		DNS:       make([]ProbeResult, 0),
+	}
+
+	for result := range results {
+		switch result.Type {
+		case "tcp":
+			snapshot.TCP = append(snapshot.TCP, result)
+		case "dns":
+			snapshot.DNS = append(snapshot.DNS, result)
+		}
+	}
+
+	select {
+	case m.Results <- snapshot:
+	case <-ctx.Done():
+	}
 }
