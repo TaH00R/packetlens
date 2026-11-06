@@ -34,11 +34,6 @@ export default function DNSAnalyticsPage() {
       ? Math.min(...successful.map((result) => result.latency_ms))
       : null;
 
-  const max =
-    successful.length > 0
-      ? Math.max(...successful.map((result) => result.latency_ms))
-      : null;
-
   const successRate =
     results.length > 0
       ? (successful.length / results.length) * 100

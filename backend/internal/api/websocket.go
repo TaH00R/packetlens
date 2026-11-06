@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -52,6 +53,9 @@ func (h *WebSocketHandler) ServeHTTP(
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	// Interrupt in-flight writes as well as waiting readers on hub shutdown/drop.
+	stopCancellation := context.AfterFunc(client.Context, cancel)
+	defer stopCancellation()
 
 	// Read incoming messages to detect client disconnection.
 	go func() {
@@ -80,7 +84,11 @@ func (h *WebSocketHandler) ServeHTTP(
 				return
 			}
 
-			if err := wsjson.Write(ctx, conn, result); err != nil {
+			writeCtx, writeCancel := context.WithTimeout(ctx, 5*time.Second)
+			err := wsjson.Write(writeCtx, conn, result)
+			writeCancel()
+			if err != nil {
+				log.Printf("[WS] Write failed: %v", err)
 				return
 			}
 		}

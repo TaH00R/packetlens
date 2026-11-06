@@ -15,6 +15,9 @@ type DNSResult struct {
 }
 
 func CheckDNS(ctx context.Context, domain string) DNSResult {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
 	result := DNSResult{
 		Domain: domain,
 	}

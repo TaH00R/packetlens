@@ -40,12 +40,16 @@ export default function LatencyChart({
   results,
 }: LatencyChartProps) {
   const chartData = useMemo<LatencyPoint[]>(() => {
-    return results.slice(-60).map((snapshot) => ({
+    return results.map((snapshot) => ({
       timestamp: new Date(snapshot.timestamp).getTime(),
       tcp: calculateAverage(snapshot.tcp),
       dns: calculateAverage(snapshot.dns),
     }));
   }, [results]);
+
+  if (chartData.length === 0) {
+    return <p className="flex h-[320px] items-center justify-center text-sm text-gray-400">No measurements in the selected time range.</p>;
+  }
 
   return (
     <div className="h-[320px] w-full">
@@ -112,9 +116,7 @@ export default function LatencyChart({
             dot={false}
             activeDot={{ r: 4 }}
             connectNulls={false}
-            isAnimationActive
-            animationDuration={700}
-            animationEasing="ease-in-out"
+            isAnimationActive={false}
           />
 
           <Line
@@ -126,9 +128,7 @@ export default function LatencyChart({
             dot={false}
             activeDot={{ r: 4 }}
             connectNulls={false}
-            isAnimationActive
-            animationDuration={700}
-            animationEasing="ease-in-out"
+            isAnimationActive={false}
           />
         </LineChart>
       </ResponsiveContainer>

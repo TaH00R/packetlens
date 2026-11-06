@@ -43,10 +43,7 @@ export default function TargetLatencyChart({
   const [probeType, setProbeType] =
     useState<ProbeType>(initialType);
 
-  const recent = useMemo(
-    () => results.slice(-60),
-    [results]
-  );
+  const recent = results;
 
   const targets = useMemo(() => {
     const unique = new Set<string>();
@@ -227,7 +224,7 @@ export default function TargetLatencyChart({
                     <Line
                       key={target}
                       type="monotone"
-                      dataKey={target}
+                      dataKey={(point) => point[target]}
                       name={target}
                       stroke={
                         COLORS[index % COLORS.length]
@@ -236,9 +233,7 @@ export default function TargetLatencyChart({
                       dot={false}
                       activeDot={{ r: 4 }}
                       connectNulls={false}
-                      isAnimationActive
-                      animationDuration={700}
-                      animationEasing="ease-in-out"
+                      isAnimationActive={false}
                     />
                   ))}
                 </LineChart>

@@ -1,6 +1,8 @@
+"use client";
 
 import { RefreshCw } from "lucide-react";
 import Image from "next/image";
+import { usePathname } from "next/navigation";
 import type { ConnectionStatus } from "@/types/metrics";
 
 interface Props {
@@ -12,6 +14,15 @@ export default function DashboardHeader({
   status,
   onReconnect,
 }: Props) {
+  const pathname = usePathname();
+  const pageTitle: Record<string, string> = {
+    "/": "Overview",
+    "/tcp": "TCP Analytics",
+    "/dns": "DNS Analytics",
+    "/health": "Network Health",
+    "/learn": "Understanding Metrics",
+  };
+
   return (
     <header className="sticky top-0 z-20 flex h-[72px] items-center justify-between border-b border-white/[0.07] bg-[#0B1016]/95 px-5 backdrop-blur-xl sm:px-8">
       <div className="flex items-center gap-3 lg:hidden">
@@ -28,7 +39,7 @@ export default function DashboardHeader({
 
       <div className="hidden text-sm text-gray-500 lg:block">
         Workspace <span className="mx-2">/</span>
-        <span className="text-gray-200">Overview</span>
+        <span className="text-gray-200">{pageTitle[pathname] ?? "PacketLens"}</span>
       </div>
 
       <div className="ml-auto flex items-center gap-4">

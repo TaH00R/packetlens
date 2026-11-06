@@ -13,12 +13,6 @@ import {
   Network,
 } from "lucide-react";
 
-import type { ConnectionStatus } from "@/types/metrics";
-
-interface Props {
-  status: ConnectionStatus;
-}
-
 const navigation = [
   { label: "Overview", icon: LayoutDashboard, href: "/" },
   { label: "TCP Analytics", icon: Network, href: "/tcp" },
@@ -26,7 +20,7 @@ const navigation = [
   { label: "Network Health", icon: Activity, href: "/health" },
 ];
 
-export default function DashboardSidebar({ status }: Props) {
+export default function DashboardSidebar() {
   const pathname = usePathname();
 
   const linkClass = (active: boolean) =>

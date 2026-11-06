@@ -57,7 +57,7 @@ function buildTargetHealth(results: ProbeResult[]): TargetHealth[] {
     groups.set(key, existing);
   }
 
-  return Array.from(groups.entries()).map(([key, measurements]) => {
+  return Array.from(groups.values()).map((measurements) => {
     const successful = measurements.filter((result) => result.success);
     const failures = measurements.length - successful.length;
 
@@ -166,7 +166,7 @@ export default function NetworkHealthPage() {
         <MetricCard
           title="Failed probes"
           value={String(failed)}
-          description="Failed attempts in current session history"
+          description="Failed attempts in selected time range"
           icon={AlertTriangle}
           color="text-red-400"
         />

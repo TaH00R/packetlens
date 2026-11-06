@@ -95,7 +95,7 @@ export default function Home() {
         <MetricCard
           title="Active targets"
           value={String(activeTargets)}
-          description="Unique targets observed this session"
+          description="Unique targets in selected time range"
           icon={Activity}
           color="text-purple-400"
         />

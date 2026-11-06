@@ -9,6 +9,7 @@ export interface ProbeResult {
 }
 
 export interface MonitoringSnapshot {
+  id?: string;
   timestamp: string;
   tcp: ProbeResult[];
   dns: ProbeResult[];

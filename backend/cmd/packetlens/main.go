@@ -11,21 +11,44 @@ import (
 	"time"
 
 	"github.com/TaH00R/packetlens/backend/internal/api"
+	"github.com/TaH00R/packetlens/backend/internal/config"
 	"github.com/TaH00R/packetlens/backend/internal/monitor"
 	"github.com/TaH00R/packetlens/backend/internal/realtime"
 	"github.com/TaH00R/packetlens/backend/internal/store"
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Printf("PacketLens stopped with error: %v", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	ctx, cancel := signal.NotifyContext(
 		context.Background(),
 		os.Interrupt,
 		syscall.SIGTERM,
 	)
 	defer cancel()
+	cfg, err := config.Load(os.LookupEnv)
+	if err != nil {
+		return err
+	}
+	startupCtx, startupCancel := context.WithTimeout(ctx, 15*time.Second)
+	database, err := store.OpenSQLite(startupCtx, cfg.DatabasePath)
+	startupCancel()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := database.Close(); err != nil {
+			log.Printf("Database close failed: %v", err)
+		}
+	}()
 
 	hub := realtime.NewHub()
-	memoryStore := store.NewMemoryStore(1000)
+	log.Printf("History database: %s | retention=%s | cleanup=%s", cfg.DatabasePath, cfg.Retention, cfg.CleanupInterval)
 
 	m := monitor.NewMonitor(
 		5*time.Second,
@@ -39,14 +62,47 @@ func main() {
 		},
 	)
 
-	var collector sync.WaitGroup
-	collector.Add(1)
+	var background sync.WaitGroup
+	background.Add(2)
 
 	go func() {
-		defer collector.Done()
+		defer background.Done()
+		ticker := time.NewTicker(cfg.CleanupInterval)
+		defer ticker.Stop()
+		for {
+			cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 30*time.Second)
+			n, err := store.Cleanup(cleanupCtx, database, time.Now().Add(-cfg.Retention))
+			cleanupCancel()
+			if err != nil && ctx.Err() == nil {
+				log.Printf("History cleanup failed: %v", err)
+			}
+			if n > 0 {
+				log.Printf("History cleanup removed %d expired snapshots", n)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+
+	go func() {
+		defer background.Done()
 
 		for snapshot := range m.Results {
-			memoryStore.AddSnapshot(snapshot)
+			// Cancel pending writes on shutdown; committed cycles remain durable.
+			writeCtx, writeCancel := context.WithTimeout(ctx, 5*time.Second)
+			saved, err := database.SaveSnapshot(writeCtx, snapshot)
+			writeCancel()
+			if err != nil {
+				if ctx.Err() != nil {
+					continue
+				}
+				log.Printf("Snapshot persistence failed; continuing live monitoring | timestamp=%s | error=%v", snapshot.Timestamp.Format(time.RFC3339Nano), err)
+			} else {
+				snapshot = saved
+			}
 			hub.Publish(snapshot)
 
 			log.Printf(
@@ -60,7 +116,8 @@ func main() {
 
 	go m.Start(ctx)
 
-	server := api.NewServer(memoryStore, hub)
+	server := api.NewServer(database, hub)
+	serverErrors := make(chan error, 1)
 
 	go func() {
 		log.Println("PacketLens API listening on :8080")
@@ -68,6 +125,7 @@ func main() {
 		if err := server.ListenAndServe(); err != nil &&
 			err != http.ErrServerClosed {
 			log.Printf("HTTP server error: %v", err)
+			serverErrors <- err
 			cancel()
 		}
 	}()
@@ -75,6 +133,7 @@ func main() {
 	<-ctx.Done()
 
 	log.Println("Shutting down PacketLens...")
+	hub.Close()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(
 		context.Background(),
@@ -86,7 +145,13 @@ func main() {
 		log.Printf("Server shutdown error: %v", err)
 	}
 
-	collector.Wait()
+	background.Wait()
 
 	log.Println("PacketLens stopped.")
+	select {
+	case err := <-serverErrors:
+		return err
+	default:
+		return nil
+	}
 }

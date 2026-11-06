@@ -2,6 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isSnapshot, mergeHistory } from "@/lib/monitoring";
 
 import type {
   ConnectionStatus,
@@ -11,13 +12,13 @@ import type {
 const WS_URL =
   process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8080/api/ws";
 
-const MAX_HISTORY = 100;
 const INITIAL_RECONNECT_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 15000;
 
 export function usePacketLensSocket() {
   const [status, setStatus] =
     useState<ConnectionStatus>("connecting");
+  const [connectionVersion, setConnectionVersion] = useState(0);
 
   const [latest, setLatest] =
     useState<MonitoringSnapshot | null>(null);
@@ -31,7 +32,7 @@ export function usePacketLensSocket() {
   const attemptsRef = useRef(0);
   const mountedRef = useRef(false);
 
-  const connect = useCallback(() => {
+  const connect = useCallback(function connectSocket() {
     if (!mountedRef.current) return;
 
     if (
@@ -46,7 +47,14 @@ export function usePacketLensSocket() {
       attemptsRef.current === 0 ? "connecting" : "reconnecting"
     );
 
-    const socket = new WebSocket(WS_URL);
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(WS_URL);
+    } catch (error) {
+      console.error("Invalid PacketLens WebSocket URL:", error);
+      setStatus("disconnected");
+      return;
+    }
     socketRef.current = socket;
 
     socket.onopen = () => {
@@ -54,28 +62,23 @@ export function usePacketLensSocket() {
 
       attemptsRef.current = 0;
       setStatus("connected");
+      setConnectionVersion((version) => version + 1);
     };
 
     socket.onmessage = (event) => {
       if (socketRef.current !== socket) return;
 
       try {
-        const snapshot = JSON.parse(
-          event.data
-        ) as MonitoringSnapshot;
+        const snapshot: unknown = JSON.parse(event.data);
 
-        if (
-          typeof snapshot.timestamp !== "string" ||
-          !Array.isArray(snapshot.tcp) ||
-          !Array.isArray(snapshot.dns)
-        ) {
+        if (!isSnapshot(snapshot)) {
           throw new Error("Invalid snapshot structure");
         }
 
         setLatest(snapshot);
 
         setHistory((previous) =>
-          [...previous, snapshot].slice(-MAX_HISTORY)
+          mergeHistory(previous, [snapshot])
         );
       } catch (error) {
         console.error("Invalid PacketLens snapshot:", error);
@@ -102,7 +105,7 @@ export function usePacketLensSocket() {
         MAX_RECONNECT_DELAY
       );
 
-      timerRef.current = setTimeout(connect, delay);
+      timerRef.current = setTimeout(connectSocket, delay);
     };
   }, []);
 
@@ -145,5 +148,6 @@ export function usePacketLensSocket() {
     latest,
     history,
     reconnect,
+    connectionVersion,
   };
 }

@@ -18,7 +18,7 @@ export default function NetworkHealth({ results }: Props) {
         <div>
           <h3 className="font-medium text-white">Probe health</h3>
           <p className="mt-1 text-xs text-gray-500">
-            Current session performance
+            Performance in selected time range
           </p>
         </div>
         <ShieldCheck className="text-teal-400" size={20} />
@@ -43,7 +43,7 @@ export default function NetworkHealth({ results }: Props) {
                   {group.label} probes
                 </span>
                 <span className="text-gray-200">
-                  {rate.toFixed(1)}%
+                  {samples.length ? `${rate.toFixed(1)}%` : "No measurements"}
                 </span>
               </div>
 

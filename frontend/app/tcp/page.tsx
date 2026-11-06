@@ -92,7 +92,7 @@ export default function TCPAnalyticsPage() {
         />
       </section>
 
-      <TargetLatencyChart results={tcpSnapshots} />
+      <TargetLatencyChart results={tcpSnapshots} availableTypes={["tcp"]} />
 
       <ProbeFeed results={results} />
     </div>
