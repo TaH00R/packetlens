@@ -12,6 +12,7 @@ import (
 
 	"github.com/TaH00R/packetlens/backend/internal/api"
 	"github.com/TaH00R/packetlens/backend/internal/monitor"
+	"github.com/TaH00R/packetlens/backend/internal/realtime"
 	"github.com/TaH00R/packetlens/backend/internal/store"
 )
 
@@ -23,6 +24,7 @@ func main() {
 	)
 	defer cancel()
 
+	hub := realtime.NewHub()
 	memoryStore := store.NewMemoryStore(1000)
 
 	m := monitor.NewMonitor(
@@ -45,13 +47,15 @@ func main() {
 
 		for result := range m.Results {
 			memoryStore.Add(result)
+			hub.Publish(result)
+
 			log.Printf("[PROBE] %+v", result)
 		}
 	}()
 
 	go m.Start(ctx)
 
-	server := api.NewServer(memoryStore)
+	server := api.NewServer(memoryStore, hub)
 
 	go func() {
 		log.Println("PacketLens API listening on :8080")
