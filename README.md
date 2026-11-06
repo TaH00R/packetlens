@@ -8,7 +8,9 @@ Use it only for destinations you own or are authorized to monitor.
 ## Features
 
 - Overview, TCP Analytics, DNS Analytics, Network Health, and a metrics guide.
-- Average successful latency, success/failure counts, and per-target health.
+- Exact P50/P90/P95/P99 successful latencies, distributions, target comparisons, and prior-period comparisons.
+- Per-target mean and latest-pair jitter, with historical trends.
+- Observed availability for 1h, 24h, 7d, and 30d, with outcome streaks and timestamps.
 - Aggregate and per-target latency charts; failures appear as gaps.
 - Global ranges: last 5 minutes, 15 minutes, hour, 6 hours, 24 hours, or All.
 - Durable SQLite snapshots and probe results, with migrations and configurable retention.
@@ -34,6 +36,7 @@ packetlens/
 |-- backend/
 |   |-- cmd/packetlens/main.go
 |   |-- internal/
+|   |   |-- analytics/    # Persisted latency, jitter, and availability
 |   |   |-- api/          # HTTP and WebSocket handlers
 |   |   |-- monitor/      # Complete monitoring cycles and types
 |   |   |-- probe/        # TCP and DNS checks
@@ -173,6 +176,8 @@ JSON error with status 503. Health also returns 503 when the database is unreach
 | GET | `/api/health` | `status`, `service`, `timestamp` |
 | GET | `/api/metrics` | `count`, `results` (flattened probes) |
 | GET | `/api/stats` | `total_results`, `probes` (statistics by type) |
+| GET | `/api/analytics` | Full-range latency, jitter, histogram, trends, previous period |
+| GET | `/api/availability` | Fixed-window observed availability, streaks, last outcomes |
 | GET | `/api/snapshots` | `count`, `snapshots`, `has_more`, `next_cursor` |
 | WebSocket | `/api/ws` | One snapshot per new monitoring cycle |
 
@@ -206,7 +211,7 @@ Their recorded attempt duration is excluded from successful latency summaries.
 Statistics include `total`, `successful`, `failed`, `avg_latency_ms`,
 `min_latency_ms`, and `max_latency_ms`. Backend latency statistics are zero
 when there are no successful probes; consult the counts before interpreting
-those values. Frontend latency cards show a dash when no successes exist.
+those values. New analytics return null for unavailable latency statistics; frontend cards show No data when no successes exist.
 
 ## Persistent history and bounded queries
 
@@ -214,7 +219,8 @@ SQLite stores snapshots and individual probe results with indexed timestamps,
 targets, and types. Embedded numbered SQL migrations run transactionally at
 startup, with schema version recorded in `PRAGMA user_version`. WAL mode,
 foreign keys, a five-second busy timeout, and full synchronous commits are enabled.
-The local connection pool is limited to one connection to serialize database work.
+The local connection pool is limited to four connections so analytics readers can
+run alongside collection. SQLite temporary sorting uses file-backed storage.
 Keep the database on a local disk, not a network filesystem.
 
 Restarting the backend preserves committed data. Existing process-local history
@@ -263,26 +269,87 @@ matching retained results in SQLite without loading their raw history into Go.
 It does not accept pagination parameters. Failed probes are excluded from latency
 aggregates; its existing count and latency fields are preserved.
 
+## Persisted analytics
+
+`GET /api/analytics?range=15m` accepts `range` (5m, 15m, 1h, 6h, 24h, all)
+and an optional RFC3339 `to` timestamp (years 1970 through 9998). Defaults are
+15m ending at server request time. It returns:
+
+- `range`, `as_of`, and the earliest retained snapshot timestamp `history_start`.
+- `current`: `from`, `to`, summaries for TCP/DNS and each target, histograms,
+  group trends, and per-target trends.
+- `previous`: the preceding equal-length period for finite ranges, without
+  duplicated boundary samples. It is null for All because no equal prior window
+  is implied by selecting all retained history.
+
+The current selection includes both endpoints. The previous period includes its
+lower endpoint and ends immediately before the current lower endpoint. Range
+membership uses snapshot timestamps. Within each target, jitter orders successes
+by probe timestamp, then snapshot timestamp, stable ID, and probe ordinal for ties.
+Only successful measurements contribute to latency, percentiles, or jitter.
+
+Percentiles are exact nearest ranks: sort the successful latencies and select the
+one-based rank `ceil(p / 100 * n)`. There is no interpolation. With one success,
+every percentile equals that measurement; no successes means null. Histograms
+use bins [0,10), [10,25), [25,50), [50,100), [100,250), [250,500), [500,1000),
+and [1000,infinity), all in milliseconds.
+
+Trend output has 60 equal-duration buckets across the entire selection. Every
+measurement contributes to its bucket; there is no latest-60-samples truncation.
+Latency trends report successful means. Empty or all-failed buckets have null
+latency, while an all-failed observed bucket has 0% availability. Empty buckets
+have null availability. This aggregation can hide short-lived latency extremes;
+summary maxima and exact percentiles remain based on every selected observation.
+Jitter differences are assigned to the bucket containing the newer observation,
+including pairs that cross bucket boundaries. Group jitter trends average valid
+per-target pair differences in each bucket; group summary jitter is an unweighted
+average of the targets' mean jitters. These two aggregations have different weights.
+`current_jitter_ms` is the latest valid pair within the selection for each target,
+not a statement that a recently failed target currently has valid latency.
+
+`GET /api/availability` accepts only the optional `to` timestamp. It returns
+`as_of`, `history_start`, and TCP/DNS and target summaries with fixed 1h, 24h, 7d,
+and 30d windows. Each includes attempts, successes, percentage, and first/last
+observed snapshot timestamps; type summaries include 60-bucket trends. Target
+summaries include last success/failure probe timestamps and consecutive observed
+success/failure counts within the retained 30-day query. Streaks may span monitoring
+gaps; they are neither uninterrupted uptime nor an inference about unmeasured time.
+No attempts means null availability. Short or partially retained histories are
+reported as observed counts rather than extended into assumed successes.
+
+Both endpoints stream query rows into bounded summaries rather than loading all
+raw results into Go/browser memory. SQLite computes success ranks with window
+functions; sorting may use temporary disk. Reports support at most 128 distinct
+probe-type/target identities; exceeding that limit returns an error, never a partial
+report. There is a 30-second deadline and at most two concurrent analytics requests
+per server; excess requests return JSON 429 with Retry-After. Other database errors
+return generic JSON 503 responses and contextual logs. No new production dependency
+was added for analytics.
+
 ## Dashboard history and time ranges
 
-The browser still retains up to 1,000 merged snapshots to bound memory use,
-independently of backend retention. At a five-second cadence this is roughly
-83 minutes. This storage milestone does not yet make the dashboard fetch older
-pages for 6-hour, 24-hour, or All selections; those views may be incomplete.
-The selector explicitly notes this cache limit. Older retained data is available
-through the paginated API above. Range-aware UI loading is a later milestone.
+The shared monitoring context loads persisted analytics every 15 seconds and
+availability every minute, also refreshing on WebSocket connection/reconnection.
+All pages consume that shared state. Overview summaries and latency trends,
+TCP/DNS analytics, and health jitter use all retained measurements in the global
+selection. All means all retained SQLite history for these reports. Availability
+uses its explicitly labeled fixed windows independently of the global range.
 
-The browser validates payloads, deduplicates by stable snapshot ID (falling back
-to timestamp and probe contents for legacy/live-only samples), and sorts cycles
-chronologically. A late REST response cannot discard newer live samples.
-Reconnection reloads the latest retained backend page.
+Target selection controls percentile cards, distributions, and latency/jitter
+charts. Comparison tables show all targets in the selected probe type. The UI
+shows observation counts, timestamps, partial-history notes, loading/API errors,
+and stale-report warnings (45 seconds for analytics, two minutes for availability).
+Changing ranges aborts the old request and clears the old range's report until the
+new one arrives; a late old response cannot overwrite the selection.
 
-Changing the selected range filters snapshots without deleting stored history.
-All analytics pages share the range. Filtering uses inclusive snapshot timestamp
-boundaries; a five-second timer advances the window even without new data.
-Charts display every cached snapshot in the range, with no separate 60-point
-limit. Times are displayed in the browser's local time zone. `All` currently means
-all cached browser history, not all retained SQLite records.
+Recent activity and the overview's recent target chart still use a browser cache
+of up to 1,000 merged snapshots, about 83 minutes at the default cadence. Those
+sections are explicitly labeled recent and may not cover a long selected range.
+The browser validates and deduplicates snapshots by stable ID, with a contents-based
+fallback for legacy/live-only payloads, and sorts them chronologically. Changing
+the selected range never deletes retained backend history. The cached view advances
+on a cleaned-up five-second timer, even without new data. Times are displayed in
+the browser's local time zone.
 
 ## Metric definitions
 
@@ -295,6 +362,9 @@ All latency and jitter values use milliseconds.
 - **Average latency:** sum of successful latencies divided by successful count.
   For 20, 25, and 30 ms, the average is 25 ms.
 - **Minimum / maximum:** lowest / highest successful latency in the selection.
+- **Percentiles:** exact nearest-rank successful latency, as defined above.
+- **Latest-pair jitter:** absolute latency difference of the two latest successful
+  measurements for one target within the selection. Two successes are required.
 - **Probe success rate:** `100 * successful attempts / total attempts`.
   Failure rate is `100 * failed attempts / total attempts`. These are probe
   outcomes, not packet-loss measurements. No attempts means no rate.
@@ -323,8 +393,10 @@ HTTP routes/CORS/statistics, store retention and isolation, concurrent store
 access, slow clients/shutdown, and local or cancelled probes. SQLite tests also
 cover restart persistence, migrations, atomic writes, cursor pagination, time
 boundaries, retention cascades, concurrent access, cancellation, database errors,
-and configuration validation. Tests do not need
-public internet access.
+and configuration validation. Analytics tests cover nearest ranks, histogram
+boundaries, target isolation, jitter chronology/failure gaps, period boundaries,
+availability windows and streaks, large histories, and concurrent reads/writes.
+Tests do not need public internet access.
 
 From `frontend/`:
 
@@ -335,19 +407,24 @@ npx tsc --noEmit
 npm run build
 ```
 
-Frontend regression tests cover nested payload validation, REST/live merging,
-identity collisions, retention, and time-range boundaries using Node's built-in
-test runner. They do not replace browser interaction tests.
+Frontend tests run through tsx and Node's test runner. jsdom supplies a simulated
+DOM for React component tests. Coverage includes nested response validation,
+REST/live merging, time ranges, empty/failed states, formatting, target/window
+selectors, abort cleanup, API errors, and late-response protection. DOM chart
+containers have deterministic test dimensions; these tests do not replace visual
+browser verification. The added tools are devDependencies only.
 
 ## Remaining limitations
 
-- The dashboard cache remains limited to 1,000 cycles; full persistent-range UI
-  loading is still a later milestone. SQLite is durable, subject to retention.
+- Recent raw activity/chart sections remain limited to 1,000 cached cycles.
+  Persisted summaries and new trend charts cover the full selected retained range.
 - Targets, probe interval, and local origins remain configured in source code.
 - Deleted history and cycles that failed persistence cannot be recovered.
 - Retention is based on age, not a disk-space quota; operators must provision disk.
-- Database work uses one local connection; long queries can delay other operations
-  until the request deadline. Larger deployments will need measured query tuning.
+- Exact percentile sorting can be expensive on very large histories. Queries
+  use bounded concurrency and deadlines; larger deployments may need rollups.
+- Trend buckets average observations and can hide short transient extremes.
+- Availability describes observed probes, not verified continuous service uptime.
 - Stale status appears after 15 seconds without a snapshot. It is a dashboard
   diagnostic and does not establish that the monitored network is down.
 - There is no authentication, target-management UI, CSV export, or full browser

@@ -44,15 +44,16 @@ func OpenSQLite(ctx context.Context, path string) (*SQLiteStore, error) {
 	params.Add("_pragma", "foreign_keys(1)")
 	params.Add("_pragma", "busy_timeout(5000)")
 	params.Add("_pragma", "synchronous(FULL)")
+	params.Add("_pragma", "temp_store(FILE)")
 	u.RawQuery = params.Encode()
 	db, err := sql.Open("sqlite", u.String())
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	// Serialize local access. This avoids writer contention and bounds connection
-	// resources; WAL still permits other processes to read the database.
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	// Analytics readers must not occupy the collector's only connection. WAL
+	// permits these bounded concurrent readers alongside collection and cleanup.
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
 	s := &SQLiteStore{db: db}
 	if err := s.initialize(ctx); err != nil {
 		db.Close()

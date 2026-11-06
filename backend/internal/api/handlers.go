@@ -15,9 +15,14 @@ import (
 	"github.com/TaH00R/packetlens/backend/internal/store"
 )
 
-type Handler struct{ store store.Store }
+type Handler struct {
+	store          store.Store
+	analyticsSlots chan struct{}
+}
 
-func NewHandler(s store.Store) *Handler { return &Handler{store: s} }
+func NewHandler(s store.Store) *Handler {
+	return &Handler{store: s, analyticsSlots: make(chan struct{}, 2)}
+}
 
 func requireGET(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method == http.MethodGet {

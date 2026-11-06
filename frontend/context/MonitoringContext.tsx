@@ -11,6 +11,9 @@ import {
 } from "react";
 
 import { usePacketLensSocket } from "@/hooks/usePacketLensSocket";
+import { useRemoteReport } from "@/hooks/useRemoteReport";
+import { parseAnalytics, parseAvailability } from "@/lib/analytics";
+import type { AnalyticsReport, AvailabilityReport, RemoteReport } from "@/types/analytics";
 
 import type {
   ConnectionStatus,
@@ -21,6 +24,8 @@ import { filterHistory, mergeHistory, parseHistory, type TimeRange } from "@/lib
 export type { TimeRange } from "@/lib/monitoring";
 
 interface MonitoringContextType {
+  analytics: RemoteReport<AnalyticsReport>;
+  availability: RemoteReport<AvailabilityReport>;
   status: ConnectionStatus;
   latest: MonitoringSnapshot | null;
   history: MonitoringSnapshot[];
@@ -28,6 +33,8 @@ interface MonitoringContextType {
   historyLoading: boolean;
   historyError: string | null;
   stale: boolean;
+  analyticsStale: boolean;
+  availabilityStale: boolean;
   range: TimeRange;
   setRange: (range: TimeRange) => void;
   reconnect: () => void;
@@ -52,6 +59,8 @@ export function MonitoringProvider({
   const [historyError, setHistoryError] = useState<string | null>(null);
 
   const [range, setRange] = useState<TimeRange>("15m");
+  const analytics = useRemoteReport(`/api/analytics?range=${range}`, parseAnalytics, 15_000, monitoring.connectionVersion);
+  const availability = useRemoteReport("/api/availability", parseAvailability, 60_000, monitoring.connectionVersion);
   const [now, setNow] = useState(0);
 
   useEffect(() => {
@@ -129,8 +138,15 @@ export function MonitoringProvider({
 
   const stale = latest !== null && now - Date.parse(latest.timestamp) > 15_000;
 
+  const analyticsStale = analytics.data !== null && now - Date.parse(analytics.data.as_of) > 45_000;
+  const availabilityStale = availability.data !== null && now - Date.parse(availability.data.as_of) > 120_000;
+
   const value = useMemo(
     () => ({
+      analytics,
+      availability,
+      analyticsStale,
+      availabilityStale,
       status: monitoring.status,
       latest,
       history,
@@ -143,6 +159,10 @@ export function MonitoringProvider({
       reconnect: monitoring.reconnect,
     }),
     [
+      analytics,
+      availability,
+      analyticsStale,
+      availabilityStale,
       monitoring.status,
       monitoring.reconnect,
       latest,

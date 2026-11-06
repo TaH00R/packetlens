@@ -9,6 +9,22 @@ import {
 
 const metrics = [
   {
+    title: "Latency percentiles",
+    icon: Clock,
+    color: "text-teal-400",
+    description: "P50, P90, P95, and P99 describe successful latency distributions.",
+    explanation: "Sort successful latencies and select the one-based nearest rank ceil(p / 100 * n). No interpolation is used. Failed probes are excluded; no successes means no percentile. Histograms use fixed millisecond bins with inclusive lower and exclusive upper bounds.",
+    example: "For 10, 20, 30, 40, and 100 ms, P50 is 30 ms and P95 is 100 ms. A single success gives the same value for every percentile.",
+  },
+  {
+    title: "Observed availability",
+    icon: ShieldCheck,
+    color: "text-blue-400",
+    description: "Successful probes / observed attempts across 1h, 24h, 7d, and 30d.",
+    explanation: "These fixed windows are independent of the dashboard range. Missing samples are unknown, not successful availability. Counts and first/last observations show how much data exists. Streaks count consecutive observed outcomes within retained 30-day history, including across monitoring gaps; they are not continuous uptime durations.",
+    example: "Nine successes and one failure give 90% observed availability even when the backend was offline for part of the window. That offline period has no measured availability.",
+  },
+  {
     title: "Latency",
     icon: Clock,
     color: "text-teal-400",
@@ -44,7 +60,7 @@ const metrics = [
     color: "text-orange-400",
     description: "Variation in latency over time.",
     explanation:
-      "PacketLens calculates the average absolute difference between successive successful latency measurements for each target. Higher values indicate less consistent latency.",
+      "PacketLens calculates the average absolute difference between successive successful latency measurements for each target. Higher values indicate less consistent latency. Failed probes are skipped; pairs may span failures. J = sum of absolute successive-success differences / (n - 1), requiring at least two successful measurements. This is not standardized RTP interarrival jitter.",
     example:
       "Measurements of 20 ms, 25 ms and 40 ms produce absolute differences of 5 ms and 15 ms. The average jitter is 10 ms.",
   },

@@ -23,7 +23,7 @@ export default function TimeRangeSelector() {
           Time range
         </p>
         <p className="text-xs text-gray-500">
-          Showing up to 1,000 recent cycles; longer ranges may be incomplete
+          Stored analytics use the full range; recent live activity uses up to 1,000 cycles
         </p>
       </div>
 

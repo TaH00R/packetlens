@@ -62,6 +62,8 @@ type Store interface {
 	SaveSnapshot(context.Context, monitor.Snapshot) (monitor.Snapshot, error)
 	QuerySnapshots(context.Context, Query) (Page, error)
 	Stats(context.Context, Filter) (Statistics, error)
+	HistoryBounds(context.Context) (*time.Time, *time.Time, error)
+	WalkMeasurements(context.Context, Filter, bool, func(Measurement) error) error
 	DeleteBefore(context.Context, time.Time) (int64, error)
 	Ping(context.Context) error
 	Close() error
