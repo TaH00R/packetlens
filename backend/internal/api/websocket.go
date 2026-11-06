@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"io"
+	"log"
 	"net/http"
 
 	"github.com/coder/websocket"
@@ -33,8 +34,16 @@ func (h *WebSocketHandler) ServeHTTP(
 	})
 
 	if err != nil {
+		log.Printf(
+			"[WS] Handshake failed | Origin: %s | Host: %s | Error: %v",
+			r.Header.Get("Origin"),
+			r.Host,
+			err,
+		)
 		return
 	}
+
+	log.Printf("[WS] Client connected: %s", r.RemoteAddr)
 
 	defer conn.CloseNow()
 
