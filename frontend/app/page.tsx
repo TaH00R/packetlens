@@ -1,69 +1,132 @@
-import Image from "next/image";
+
+"use client";
+
+import {
+  Activity,
+  Globe,
+  Network,
+  ShieldCheck,
+} from "lucide-react";
+
+import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
+import DashboardHeader from "@/components/dashboard/DashboardHeader";
+import MetricCard from "@/components/dashboard/MetricCard";
+import LatencyChart from "@/components/dashboard/LatencyChart";
+import ProbeFeed from "@/components/dashboard/ProbeFeed";
+import NetworkHealth from "@/components/dashboard/NetworkHealth";
+import TargetLatencyChart from "@/components/dashboard/TargetLatencyChart";
+
+import { usePacketLensSocket } from "@/hooks/usePacketLensSocket";
+import type {
+  ProbeResult,
+} from "@/types/metrics";
+
+function average(results: ProbeResult[]) {
+  const successful = results.filter((result) => result.success);
+
+  if (successful.length === 0) return "—";
+
+  const total = successful.reduce(
+    (sum, result) => sum + result.latency_ms,
+    0
+  );
+
+  return `${(total / successful.length).toFixed(2)} ms`;
+}
 
 export default function Home() {
+  const { status, history, reconnect } = usePacketLensSocket();
+
+  // Flatten monitoring snapshots into individual probe results.
+  const probeHistory = history.flatMap((snapshot) => [
+    ...snapshot.tcp,
+    ...snapshot.dns,
+  ]);
+
+  // Separate successful measurements.
+  const successful = probeHistory.filter((result) => result.success);
+
+  const tcp = successful.filter((result) => result.type === "tcp");
+  const dns = successful.filter((result) => result.type === "dns");
+
+  // Calculate success rate across individual probe attempts.
+  const successRate = probeHistory.length
+    ? `${((successful.length / probeHistory.length) * 100).toFixed(1)}%`
+    : "—";
+
+  const activeTargets = new Set(
+    probeHistory.map((result) => `${result.type}:${result.target}`)
+  ).size;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <main className="flex min-h-screen bg-[#0B1016] text-white">
+      <DashboardSidebar status={status} />
+
+      <div className="min-w-0 flex-1">
+        <DashboardHeader
+          status={status}
+          onReconnect={reconnect}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
+
+        <div className="mx-auto max-w-[1550px] space-y-7 p-5 sm:p-8">
+          <section id="overview">
+            <div className="mb-3 inline-flex rounded-md border border-teal-500/20 bg-teal-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-teal-400">
+              Network observability
+            </div>
+
+            <h1 className="text-3xl font-semibold tracking-tight">
+              Network overview
+            </h1>
+
+            <p className="mt-2 text-sm text-gray-500">
+              Monitor connectivity, latency and network performance.
+            </p>
+          </section>
+
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard
+              title="TCP latency"
+              value={average(tcp)}
+              description="Average connection establishment time"
+              icon={Network}
+              color="text-teal-400"
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+            <MetricCard
+              title="DNS resolution"
+              value={average(dns)}
+              description="Average domain lookup duration"
+              icon={Globe}
+              color="text-blue-400"
+            />
+
+            <MetricCard
+              title="Success rate"
+              value={successRate}
+              description={`${successful.length} successful / ${probeHistory.length} total`}
+              icon={ShieldCheck}
+              color="text-emerald-400"
+            />
+
+            <MetricCard
+              title="Active targets"
+              value={String(activeTargets)}
+              description="Unique targets observed this session"
+              icon={Activity}
+              color="text-purple-400"
+            />
+          </section>
+
+          {/* Chart consumes complete monitoring snapshots. */}
+          <LatencyChart results={history} />
+          <TargetLatencyChart results={history} />
+
+<section className="grid grid-cols-1 gap-5 xl:grid-cols-[1.5fr_1fr]">
+  <NetworkHealth results={probeHistory} />
+  <ProbeFeed results={probeHistory} />
+</section>
         </div>
-      </main>
-    </div>
+      </div>
+    </main>
   );
 }
