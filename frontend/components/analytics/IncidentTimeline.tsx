@@ -7,6 +7,7 @@ import { useEpisodeFeed } from "@/hooks/useEpisodeFeed";
 import { formatIncidentDuration, parseIncidents } from "@/lib/incidents";
 import MetricCard from "@/components/dashboard/MetricCard";
 import EpisodePagination from "./EpisodePagination";
+import CorrelationFeed from "./CorrelationFeed";
 
 const date = (value: string) => new Date(value).toLocaleString();
 
@@ -18,6 +19,7 @@ export default function IncidentTimeline() {
   const report = state.data;
   return (
     <section className="space-y-5">
+      <CorrelationFeed />
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div><h2 className="text-xl font-medium">Failure incident timeline</h2><p className="mt-2 max-w-3xl text-xs leading-6 text-gray-400">Incidents require sustained observed failures for one probe type and target. Isolated failed probes remain in recent activity. Recovery requires successful confirmation. Missing measurements are unknown, and these observations do not establish a root cause.</p></div>
         <div className="flex flex-wrap gap-3 text-xs text-gray-300">

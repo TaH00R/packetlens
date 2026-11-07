@@ -7,19 +7,22 @@ import (
 	"time"
 
 	"github.com/TaH00R/packetlens/backend/internal/anomaly"
+	"github.com/TaH00R/packetlens/backend/internal/correlation"
 	"github.com/TaH00R/packetlens/backend/internal/incident"
 	"github.com/TaH00R/packetlens/backend/internal/monitor"
 )
 
 type MemoryStore struct {
-	mu             sync.RWMutex
-	snapshots      []monitor.Snapshot
-	capacity       int
-	closed         bool
-	anomalyStates  map[string]anomaly.State
-	anomalyEvents  map[string]anomaly.Event
-	incidentStates map[string]incident.State
-	incidents      map[string]incident.Event
+	mu               sync.RWMutex
+	snapshots        []monitor.Snapshot
+	capacity         int
+	closed           bool
+	anomalyStates    map[string]anomaly.State
+	anomalyEvents    map[string]anomaly.Event
+	incidentStates   map[string]incident.State
+	incidents        map[string]incident.Event
+	correlationState correlation.State
+	correlations     map[string]correlation.Event
 }
 
 var _ Store = (*MemoryStore)(nil)
@@ -42,6 +45,10 @@ func (s *MemoryStore) SaveSnapshot(ctx context.Context, snapshot monitor.Snapsho
 			return snapshot, fmt.Errorf("duplicate snapshot ID")
 		}
 	}
+	nextCorrelation, correlationEvents, err := correlation.Process(s.correlationState, correlation.DefaultConfig(), snapshot)
+	if err != nil {
+		return snapshot, err
+	}
 	ordinal := 0
 	for _, group := range [][]monitor.ProbeResult{snapshot.TCP, snapshot.DNS} {
 		for _, p := range group {
@@ -59,6 +66,10 @@ func (s *MemoryStore) SaveSnapshot(ctx context.Context, snapshot monitor.Snapsho
 			ordinal++
 		}
 	}
+	s.correlationState = nextCorrelation
+	for _, e := range correlationEvents {
+		s.correlations[e.ID] = e
+	}
 	s.addSnapshot(snapshot)
 	return snapshot, nil
 }
@@ -69,6 +80,7 @@ func NewMemoryStore(capacity int) *MemoryStore {
 	}
 
 	return &MemoryStore{
+		correlations:   make(map[string]correlation.Event),
 		incidentStates: make(map[string]incident.State), incidents: make(map[string]incident.Event),
 		anomalyStates: make(map[string]anomaly.State), anomalyEvents: make(map[string]anomaly.Event),
 		snapshots: make([]monitor.Snapshot, 0, capacity),
@@ -92,6 +104,11 @@ func (s *MemoryStore) addSnapshot(snapshot monitor.Snapshot) {
 	// Closed detector records follow the test/development raw-history window.
 	if len(s.snapshots) > 0 {
 		oldest := s.snapshots[0].Timestamp
+		for id, e := range s.correlations {
+			if e.EndCycle != nil && e.EndCycle.Before(oldest) {
+				delete(s.correlations, id)
+			}
+		}
 		for id, event := range s.incidents {
 			if event.RecoveryCycle != nil && event.RecoveryCycle.Before(oldest) {
 				delete(s.incidents, id)
@@ -219,6 +236,11 @@ func (s *MemoryStore) DeleteBefore(ctx context.Context, before time.Time) (int64
 		kept = append(kept, snapshot)
 	}
 	s.snapshots = kept
+	for id, e := range s.correlations {
+		if e.EndCycle != nil && e.EndCycle.Before(before) {
+			delete(s.correlations, id)
+		}
+	}
 	return deleted, nil
 }
 

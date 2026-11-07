@@ -67,6 +67,7 @@ type Store interface {
 	WalkMeasurements(context.Context, Filter, bool, func(Measurement) error) error
 	QueryAnomalies(context.Context, AnomalyQuery) (AnomalyPage, error)
 	QueryIncidents(context.Context, IncidentQuery) (IncidentPage, error)
+	QueryCorrelations(context.Context, EpisodeQuery) (CorrelationPage, error)
 	WalkAnomalyStarts(context.Context, Filter, func(anomaly.Event) error) error
 	DeleteBefore(context.Context, time.Time) (int64, error)
 	Ping(context.Context) error

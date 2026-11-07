@@ -14,6 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/TaH00R/packetlens/backend/internal/anomaly"
+	"github.com/TaH00R/packetlens/backend/internal/correlation"
 	"github.com/TaH00R/packetlens/backend/internal/incident"
 	"github.com/TaH00R/packetlens/backend/internal/monitor"
 )
@@ -22,9 +23,10 @@ import (
 var migrations embed.FS
 
 type SQLiteStore struct {
-	db             *sql.DB
-	anomalyConfig  anomaly.Config
-	incidentConfig incident.Config
+	db                *sql.DB
+	anomalyConfig     anomaly.Config
+	incidentConfig    incident.Config
+	correlationConfig correlation.Config
 }
 
 var _ Store = (*SQLiteStore)(nil)
@@ -39,6 +41,13 @@ func OpenSQLiteWithAnomalies(ctx context.Context, path string, cfg anomaly.Confi
 }
 
 func OpenSQLiteWithDetectors(ctx context.Context, path string, cfg anomaly.Config, incidents incident.Config) (*SQLiteStore, error) {
+	return OpenSQLiteWithCorrelation(ctx, path, cfg, incidents, correlation.DefaultConfig())
+}
+
+func OpenSQLiteWithCorrelation(ctx context.Context, path string, cfg anomaly.Config, incidents incident.Config, correlations correlation.Config) (*SQLiteStore, error) {
+	if err := correlations.Validate(); err != nil {
+		return nil, err
+	}
 	if err := incidents.Validate(); err != nil {
 		return nil, err
 	}
@@ -74,7 +83,7 @@ func OpenSQLiteWithDetectors(ctx context.Context, path string, cfg anomaly.Confi
 	// permits these bounded concurrent readers alongside collection and cleanup.
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
-	s := &SQLiteStore{db: db, anomalyConfig: cfg, incidentConfig: incidents}
+	s := &SQLiteStore{db: db, anomalyConfig: cfg, incidentConfig: incidents, correlationConfig: correlations}
 	if err := s.initialize(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -162,6 +171,9 @@ func (s *SQLiteStore) SaveSnapshot(ctx context.Context, snapshot monitor.Snapsho
 			}
 			ordinal++
 		}
+	}
+	if err := s.processCorrelation(ctx, tx, snapshot); err != nil {
+		return snapshot, err
 	}
 	if err := tx.Commit(); err != nil {
 		return snapshot, fmt.Errorf("commit snapshot: %w", err)
@@ -350,6 +362,9 @@ func (s *SQLiteStore) DeleteBefore(ctx context.Context, before time.Time) (int64
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM incidents WHERE id IN (SELECT id FROM incidents WHERE recovery_cycle < ? ORDER BY recovery_cycle LIMIT ?)`, formatTime(before), CleanupBatchSize); err != nil {
 		return 0, fmt.Errorf("clean up recovered incidents: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM correlations WHERE id IN (SELECT id FROM correlations WHERE recovery_cycle < ? ORDER BY recovery_cycle LIMIT ?)`, formatTime(before), CleanupBatchSize); err != nil {
+		return 0, fmt.Errorf("clean up correlations: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err

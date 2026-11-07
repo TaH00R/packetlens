@@ -24,6 +24,7 @@ func NewServer(
 	mux.HandleFunc("/api/analytics", handler.Analytics)
 	mux.HandleFunc("/api/anomalies", handler.Anomalies)
 	mux.HandleFunc("/api/incidents", handler.Incidents)
+	mux.HandleFunc("/api/correlations", handler.Correlations)
 	mux.HandleFunc("/api/availability", handler.Availability)
 	mux.Handle("/api/ws", wsHandler)
 	mux.HandleFunc("/api/snapshots", handler.Snapshots)

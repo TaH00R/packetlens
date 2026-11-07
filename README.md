@@ -12,6 +12,7 @@ Use it only for destinations you own or are authorized to monitor.
 - Per-target mean and latest-pair jitter, with historical trends.
 - Persistent rolling median/MAD anomaly episodes, duplicate suppression, a feed, and chart markers.
 - Sustained-failure incidents, confirmed recovery, elapsed spans, and a dedicated incident timeline.
+- Persisted cross-target failure correlation with possible shared connectivity indicators.
 - Observed availability for 1h, 24h, 7d, and 30d, with outcome streaks and timestamps.
 - Aggregate and per-target latency charts; failures appear as gaps.
 - Global ranges: last 5 minutes, 15 minutes, hour, 6 hours, 24 hours, or All.
@@ -40,6 +41,7 @@ packetlens/
 |   |-- internal/
 |   |   |-- analytics/    # Persisted latency, jitter, and availability
 |   |   |-- anomaly/      # Pure rolling median/MAD detector and episode policy
+|   |   |-- correlation/  # Recent cross-target failure overlap episodes
 |   |   |-- incident/     # Sustained observed failure and recovery state machine
 |   |   |-- api/          # HTTP and WebSocket handlers
 |   |   |-- monitor/      # Complete monitoring cycles and types
@@ -183,6 +185,7 @@ JSON error with status 503. Health also returns 503 when the database is unreach
 | GET | `/api/analytics` | Full-range latency, jitter, histogram, trends, previous period |
 | GET | `/api/anomalies` | Bounded, filtered anomaly episode feed |
 | GET | `/api/incidents` | Incident history, filtered pages, open/recovered totals |
+| GET | `/api/correlations` | Bounded possible shared connectivity event feed |
 | GET | `/api/availability` | Fixed-window observed availability, streaks, last outcomes |
 | GET | `/api/snapshots` | `count`, `snapshots`, `has_more`, `next_cursor` |
 | WebSocket | `/api/ws` | One snapshot per new monitoring cycle |
@@ -526,12 +529,12 @@ Status/probe filters and older/previous/latest controls share pagination logic w
 the anomaly feed. Changing range or filters aborts the old request and resets page
 navigation. Loading, empty, API-error, and stale states are explicit.
 
-Cross-target failure correlation is the next milestone; simultaneous incidents
-currently remain separate observations, with no confirmed shared cause inferred.
+The cross-target correlation feed groups recent overlapping failures separately
+from these sustained target incidents. Neither establishes a confirmed cause.
 
 ## Dashboard history and time ranges
 
-The shared monitoring context loads persisted analytics, anomalies, and incidents
+The shared monitoring context loads persisted analytics, anomalies, incidents, and correlations
 every 15 seconds and availability every minute, also refreshing on WebSocket connection/reconnection.
 All pages consume that shared state. Overview summaries and latency trends,
 TCP/DNS analytics, and health jitter use all retained measurements in the global
@@ -582,6 +585,79 @@ All latency and jitter values use milliseconds.
 A successful probe establishes only that a particular operation succeeded at
 that time. It cannot prove that every device, service, or network path is healthy.
 
+## Cross-target failure correlation
+
+Correlation runs once per newly persisted complete monitoring cycle, independently
+of the sustained-failure incident thresholds. It can therefore group isolated
+failures before individual targets qualify for incidents. Migration 004 adds its
+tables automatically at backend startup; existing records remain intact. Old
+history is not retrospectively classified.
+
+| Variable | Default | Validation |
+| --- | --- | --- |
+| `PACKETLENS_CORRELATION_WINDOW` | `15s` | Go duration, 1s..1h |
+| `PACKETLENS_CORRELATION_MIN_TARGETS` | `2` | Integer, 2..128 distinct target names |
+
+The detector keeps the latest observed outcome for each probe-type/target identity.
+At each evaluation, a failure qualifies when its probe timestamp is within the
+inclusive window ending at the evaluation watermark. The watermark is the maximum
+of the current cycle timestamp, its probe timestamps, and the prior watermark.
+A newer successful outcome supersedes that identity's failure. Distinct exact
+target strings are counted, so TCP and DNS failures for the identical target string
+alone cannot meet the two-target default. TCP endpoints with different ports are
+different target strings. This is temporal correlation, not proof of independent
+network paths or a common cause.
+
+At most one global correlation episode is active. Further qualifying evaluations
+update its ID and last-overlap timestamp, rather than creating repeated events.
+The member list is the union of affected probe identities observed during that
+episode; it does not mean every member failed simultaneously. The window and
+minimum-target policy stay fixed until that episode ends, including across
+restarts. A new episode uses current startup configuration.
+
+An evaluation with too few qualifying distinct targets ends the overlap. A gap
+between qualifying evaluations longer than the saved window also ends the old
+episode before a new one can start. `ended_at` is the ending evaluation time,
+not a confirmed recovery time or an exact inferred end of network failure.
+Successes and expired measurements can both end an overlap. With no new cycles,
+there is no evaluation and an active event stays stored; the dashboard explicitly
+warns when its last overlap is too old to describe current connectivity.
+Sustained target incidents and their confirmed recovery remain separate.
+
+Cycles older than the last processed cycle timestamp remain in raw history but
+do not change correlation. Within accepted cycles, older probe outcomes do not
+replace newer ones; timestamp ties follow stored TCP/DNS probe order. Keep the
+host clock synchronized: large clock jumps can expire recent observations.
+
+State and events commit atomically with snapshots, anomalies and target incidents;
+a write failure rolls back the entire cycle. The detector retains at most one
+outcome per identity for up to one hour (the maximum configurable window), with
+limits of 128 recent identities and 128 accumulated members per episode. Exceeding
+a limit produces a logged storage error rather than silently truncating a report.
+Ended events follow retention based on their ending cycle and are deleted in
+batches of at most 500 with their indexed membership rows. Active events and the
+single bounded state record survive cleanup, even when raw history expires.
+
+`GET /api/correlations` supports the same `range`, `to`, `type`, `target`, `limit`
+and `before` parameters as the anomaly feed (default 50, maximum 200 events).
+Type and target must match the same member of an event. Range selection uses
+cycle timestamps and includes episodes overlapping the selected window. Responses
+contain `range`, `as_of`, `count`, `correlations`, `has_more`, and `next_cursor`.
+Events include `id`, `cycle_timestamp`, `detected_at`, `last_correlated_at`, nullable
+`ended_at`/`end_cycle`, `members` (type and target), and `policy` (window in
+nanoseconds and minimum target count). Status and membership reflect the latest
+stored update even with historical `to`; this is not a reconstruction of what the
+operator knew at that time. Invalid requests return JSON 400, other methods 405,
+and storage failures 503. Reads have a five-second deadline and use timestamp and
+member indexes with bounded cursor pages.
+
+The shared frontend context refreshes the first page every 15 seconds and on
+WebSocket reconnection. The possible shared connectivity feed appears above the
+incident timeline on Overview, Network Health, and `/incidents`. Probe filtering,
+older pages, and the global time range use the existing shared pagination logic.
+Loading, errors, empty selections, stale reports, affected targets and ended
+overlaps have explicit states. Labels do not assert a confirmed root cause.
+
 ## Checks
 
 From `backend/`:
@@ -605,7 +681,11 @@ cursor/filter behaviour, marker counts, and retention of unresolved episodes.
 Incident tests cover isolated failures, failure/recovery thresholds, gaps, frozen
 policy, restart continuity, atomic rollback, migration from v2, identity isolation,
 pagination/count/status contracts, invalid state, and recovered/open retention.
-Tests do not need public internet access.
+Correlation tests cover inclusive windows, distinct target names, superseding
+successes, expired observations, monitoring gaps, policy retention, out-of-order
+cycles, limits, concurrent writes, restart continuity, rollback, migration from v3,
+filtered cursor pages, API validation, and retention cascades. Tests do not need
+public internet access.
 
 From `frontend/`:
 
@@ -623,7 +703,9 @@ selectors, abort cleanup, API errors, and late-response protection. Anomaly test
 cover response validation, severity/recovery rendering, feed filtering/pagination,
 and visible onset markers. Incident tests verify lifecycle validation/rendering,
 zero-duration recovery, gap warnings, API errors, status/probe filters, pagination,
-and range changes while viewing older pages. DOM chart
+and range changes while viewing older pages. Correlation tests cover payload
+validation, affected targets, uncertainty warnings, ended overlaps, filters,
+pagination, range resets, errors and empty reports. DOM chart
 containers have deterministic test dimensions; these tests do not replace visual
 browser verification. The added tools are devDependencies only.
 
@@ -639,7 +721,8 @@ browser verification. The added tools are devDependencies only.
 - Trend buckets average observations and can hide short transient extremes.
 - Availability describes observed probes, not verified continuous service uptime.
 - Incident durations are elapsed observation spans; they can include unknown gaps.
-- Incidents are tracked per target; cross-target correlation is not implemented yet.
+- Cross-target correlation describes temporal overlap, not a confirmed cause or
+  verified shared infrastructure; missing measurements can end the overlap.
 - Stale status appears after 15 seconds without a snapshot. It is a dashboard
   diagnostic and does not establish that the monitored network is down.
 - There is no authentication, target-management UI, CSV export, or full browser

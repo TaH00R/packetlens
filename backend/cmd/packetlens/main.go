@@ -36,7 +36,7 @@ func run() error {
 		return err
 	}
 	startupCtx, startupCancel := context.WithTimeout(ctx, 15*time.Second)
-	database, err := store.OpenSQLiteWithDetectors(startupCtx, cfg.DatabasePath, cfg.Anomaly, cfg.Incident)
+	database, err := store.OpenSQLiteWithCorrelation(startupCtx, cfg.DatabasePath, cfg.Anomaly, cfg.Incident, cfg.Correlation)
 	startupCancel()
 	if err != nil {
 		return err
@@ -47,6 +47,7 @@ func run() error {
 		}
 	}()
 
+	log.Printf("Failure correlation | window=%s | minimum_distinct_targets=%d", cfg.Correlation.Window, cfg.Correlation.MinTargets)
 	hub := realtime.NewHub()
 	log.Printf("History database: %s | retention=%s | cleanup=%s", cfg.DatabasePath, cfg.Retention, cfg.CleanupInterval)
 	log.Printf("Failure incident detector | failure_threshold=%d | recovery_threshold=%d | maximum_observation_gap=%s", cfg.Incident.FailureThreshold, cfg.Incident.RecoveryThreshold, cfg.Incident.MaxGap)

@@ -14,6 +14,8 @@ import { usePacketLensSocket } from "@/hooks/usePacketLensSocket";
 import { useRemoteReport } from "@/hooks/useRemoteReport";
 import { parseAnomalies } from "@/lib/anomalies";
 import type { AnomalyReport } from "@/types/anomalies";
+import { parseCorrelations } from "@/lib/correlations";
+import type { CorrelationReport } from "@/types/correlations";
 import { parseIncidents } from "@/lib/incidents";
 import type { IncidentReport } from "@/types/incidents";
 import { parseAnalytics, parseAvailability } from "@/lib/analytics";
@@ -28,6 +30,8 @@ import { filterHistory, mergeHistory, parseHistory, type TimeRange } from "@/lib
 export type { TimeRange } from "@/lib/monitoring";
 
 interface MonitoringContextType {
+  correlations: RemoteReport<CorrelationReport>;
+  correlationsStale: boolean;
   incidents: RemoteReport<IncidentReport>;
   incidentsStale: boolean;
   anomalies: RemoteReport<AnomalyReport>;
@@ -67,6 +71,7 @@ export function MonitoringProvider({
   const [historyError, setHistoryError] = useState<string | null>(null);
 
   const [range, setRange] = useState<TimeRange>("15m");
+  const correlations = useRemoteReport(`/api/correlations?range=${range}&limit=50`, parseCorrelations, 15_000, monitoring.connectionVersion);
   const incidents = useRemoteReport(`/api/incidents?range=${range}&limit=50`, parseIncidents, 15_000, monitoring.connectionVersion);
   const anomalies = useRemoteReport(`/api/anomalies?range=${range}&limit=50`, parseAnomalies, 15_000, monitoring.connectionVersion);
   const analytics = useRemoteReport(`/api/analytics?range=${range}`, parseAnalytics, 15_000, monitoring.connectionVersion);
@@ -149,12 +154,15 @@ export function MonitoringProvider({
   const stale = latest !== null && now - Date.parse(latest.timestamp) > 15_000;
 
   const analyticsStale = analytics.data !== null && now - Date.parse(analytics.data.as_of) > 45_000;
+  const correlationsStale = correlations.data !== null && now - Date.parse(correlations.data.as_of) > 45_000;
   const incidentsStale = incidents.data !== null && now - Date.parse(incidents.data.as_of) > 45_000;
   const anomaliesStale = anomalies.data !== null && now - Date.parse(anomalies.data.as_of) > 45_000;
   const availabilityStale = availability.data !== null && now - Date.parse(availability.data.as_of) > 120_000;
 
   const value = useMemo(
     () => ({
+      correlations,
+      correlationsStale,
       incidents,
       incidentsStale,
       anomalies,
@@ -175,6 +183,8 @@ export function MonitoringProvider({
       reconnect: monitoring.reconnect,
     }),
     [
+      correlations,
+      correlationsStale,
       incidents,
       incidentsStale,
       anomalies,

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/TaH00R/packetlens/backend/internal/anomaly"
+	"github.com/TaH00R/packetlens/backend/internal/correlation"
 	"github.com/TaH00R/packetlens/backend/internal/incident"
 )
 
@@ -16,6 +17,7 @@ type Config struct {
 	CleanupInterval time.Duration
 	Anomaly         anomaly.Config
 	Incident        incident.Config
+	Correlation     correlation.Config
 }
 
 // Load accepts an environment lookup so validation can be tested without
@@ -99,6 +101,22 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		c.Incident.MaxGap = gap
 	}
 	if err := c.Incident.Validate(); err != nil {
+		return c, err
+	}
+	c.Correlation = correlation.DefaultConfig()
+	if value, ok := lookup("PACKETLENS_CORRELATION_WINDOW"); ok {
+		c.Correlation.Window, err = time.ParseDuration(strings.TrimSpace(value))
+		if err != nil {
+			return c, fmt.Errorf("PACKETLENS_CORRELATION_WINDOW must be a duration")
+		}
+	}
+	if value, ok := lookup("PACKETLENS_CORRELATION_MIN_TARGETS"); ok {
+		c.Correlation.MinTargets, err = strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return c, fmt.Errorf("PACKETLENS_CORRELATION_MIN_TARGETS must be an integer")
+		}
+	}
+	if err := c.Correlation.Validate(); err != nil {
 		return c, err
 	}
 	return c, nil
