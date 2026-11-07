@@ -30,6 +30,9 @@ func NewServer(
 	mux.Handle("/api/targets", targets)
 	mux.Handle("/api/targets/", targets)
 
+	mux.HandleFunc("/api/export/measurements.csv", handler.ExportMeasurements)
+	mux.HandleFunc("/api/export/dns-resolvers.csv", handler.ExportResolvers)
+	mux.HandleFunc("/api/export/incidents.csv", handler.ExportIncidents)
 	mux.HandleFunc("/api/health", handler.Health)
 	mux.HandleFunc("/api/metrics", handler.Metrics)
 	mux.HandleFunc("/api/stats", handler.Stats)

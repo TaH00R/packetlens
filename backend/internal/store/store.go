@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/TaH00R/packetlens/backend/internal/anomaly"
+	"github.com/TaH00R/packetlens/backend/internal/incident"
 	"github.com/TaH00R/packetlens/backend/internal/monitor"
 	"github.com/TaH00R/packetlens/backend/internal/resolver"
 )
@@ -69,6 +70,7 @@ type Store interface {
 	WalkDNSComparisons(context.Context, Filter, func(time.Time, monitor.DNSComparison) error) error
 	QueryAnomalies(context.Context, AnomalyQuery) (AnomalyPage, error)
 	QueryIncidents(context.Context, IncidentQuery) (IncidentPage, error)
+	WalkIncidents(context.Context, Filter, func(incident.Event) error) error
 	QueryCorrelations(context.Context, EpisodeQuery) (CorrelationPage, error)
 	WalkAnomalyStarts(context.Context, Filter, func(anomaly.Event) error) error
 	DeleteBefore(context.Context, time.Time) (int64, error)

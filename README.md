@@ -24,6 +24,7 @@ Use it only for destinations you own or are authorized to monitor.
   with a delay from 1 to 15 seconds.
 - Loading, history-error, connection, empty, and stale measurement messages.
 - Authenticated target management with persisted per-target intervals/timeouts and bounded scheduling.
+- Streaming CSV exports for measurements, resolver comparisons and incident history.
 - Desktop sidebar and mobile navigation.
 
 ## Stack and layout
@@ -190,6 +191,9 @@ JSON error with status 503. Health also returns 503 when the database is unreach
 
 | Method | Endpoint | Response |
 | --- | --- | --- |
+| GET | `/api/export/measurements.csv` | Streaming filtered TCP/system DNS measurements |
+| GET | `/api/export/dns-resolvers.csv` | Streaming explicit DNS resolver measurements |
+| GET | `/api/export/incidents.csv` | Streaming overlapping incident records |
 | GET | `/api/health` | `status`, `service`, `timestamp` |
 | GET | `/api/metrics` | `count`, `results` (flattened probes) |
 | GET | `/api/stats` | `total_results`, `probes` (statistics by type) |
@@ -857,6 +861,103 @@ if removed from current startup configuration. Comparing one domain provides a m
 comparable sample mix than the all-domain mean. Configuration changes do not erase
 retained results.
 
+## CSV export and reporting
+
+Expand **Export CSV** beneath the global time selector. Choose Measurements, DNS
+resolver comparisons, or Incident history; optionally select TCP/DNS and enter an
+exact target. Suggestions come from the loaded analytics, but any retained target
+can be entered even if it is no longer configured. Resolver exports use DNS only.
+The global time range, filters and UTC end time are captured when Download CSV is
+clicked. Later time-range changes do not change an in-progress download. Empty
+selections produce a valid header-only file. Cancel stops the pending request;
+API errors and interrupted transfers remain visible without saving a partial file.
+
+The three GET endpoints accept only:
+
+| Parameter | Meaning |
+| --- | --- |
+| `range` | `5m`, `15m` (default), `1h`, `6h`, `24h`, or `all` retained data |
+| `to` | Optional inclusive RFC3339 end time, default server request time |
+| `type` | Optional `tcp` or `dns`; resolver exports reject `tcp` |
+| `target` | Optional exact target string |
+
+Measurement and resolver selection uses inclusive **snapshot** timestamps, matching
+the global range convention. Probe timestamps are exported separately. `all` has no
+lower bound and includes all matching retained rows through `to`; it does not mean
+unlimited permanent retention. Unknown, repeated, empty or malformed parameters
+receive JSON 400. Exports do not accept history pagination parameters or a `from`
+parameter. Use a finite `range` with a fixed `to` to split large selections into
+smaller periods (boundaries are inclusive, so account for a boundary when combining
+adjacent exports). POST/other methods return JSON 405.
+
+- `/api/export/measurements.csv`: `timestamp`, `snapshot_timestamp`, `target`,
+  `probe_type`, `latency_ms`, `success`, `error`. Includes TCP and system DNS with
+  the same semantics as existing metrics. Rows follow probe time, then stable
+  cycle/ID/ordinal ordering. Failed latency values are recorded attempt durations,
+  not successful resolution/connectivity timings; use the success column.
+- `/api/export/dns-resolvers.csv`: the same columns plus `resolver` and `outcome`.
+  Includes only explicit resolver comparisons, ordered by cycle, ID and ordinal.
+  Resolver identity, timeouts and other failure categories survive export.
+- `/api/export/incidents.csv`: `id`, `probe_type`, `target`, `status`, `started_at`,
+  `cycle_timestamp`, `detected_at`, `last_failure_at`, `last_observed_at`,
+  `recovered_at`, `elapsed_span_ms`, `failed_probes`, `recovery_successes`,
+  `has_monitoring_gaps`, `first_error`, `last_error`, `failure_threshold`,
+  `recovery_threshold`, `max_gap_ms`. Rows follow first-failure cycle and ID order.
+
+Incident selection includes episodes overlapping the time window, including older
+open episodes. Status and recovery metadata are the latest stored state when the
+query starts, even with historical `to`; this is not an immutable audit log of what
+was known then. Open episodes have empty recovery/duration fields; a recovered
+zero-duration span exports numeric zero. Elapsed spans can include unknown gaps and
+do not prove continuous downtime. Correlation/anomaly episodes are not included in
+incident exports.
+
+Files use UTF-8 CSV with a header, comma delimiters and LF record endings. Go's
+`encoding/csv` quotes embedded commas, quotes and newlines. Text fields, including
+errors, retain their literal values. Timestamps are UTC RFC3339Nano and latency is
+milliseconds; booleans are `true`/`false`, with no fake production rows or summary
+footer. These files can be analyzed with a CSV-aware reader rather than splitting
+text on commas or line breaks.
+
+SQLite walks one row at a time; neither raw measurement history nor the full CSV
+is loaded into Go memory. Incident exports use a single ordered read rather than
+repeated feed pages/count queries. Each dataset is read with one consistent SQL
+statement, so rows committed after that read begins are not mixed into it. Retention
+and new monitoring writes can continue in WAL mode. Long reads can temporarily
+hold WAL pages; the deadlines below bound their lifetime. No migration or production
+dependency was added for export.
+
+A backend process permits one export at a time, separately from the two concurrent
+analytics reads, leaving a database connection available for collection. A bounded
+request bucket permits six accepted export attempts initially and refills one every
+ten seconds. Busy/rate-limited requests receive JSON 429 with Retry-After; ordinary
+storage failures before output begins return generic JSON 503. Each export has a
+60-second context deadline and a five-second write deadline refreshed during
+stream flushes, with output flushed at least every 128 rows. Client cancellation
+stops database iteration. If an error occurs after output has begun, the server
+aborts the HTTP stream using Go's designated abort mechanism; it does not append
+JSON to CSV or silently finish a truncated file. Failures are logged with dataset
+and emitted-row context. Discard any incomplete output from a failed external
+transfer.
+
+The dashboard reads the response incrementally and saves a Blob only after the
+stream completes successfully. It caps each browser download at **32 MiB** and
+shows received bytes, pending/cancel states, failures, and completion initiation.
+This limit prevents an unbounded JavaScript buffer. For a larger download, use the
+captured **Export URL for large files** with a tool that streams directly to disk,
+for example:
+
+```bash
+curl --fail --output measurements.csv "http://localhost:8080/api/export/measurements.csv?range=all&type=tcp"
+```
+
+The backend's 60-second deadline still applies; reduce the range or filter by target
+if needed. Export is read-only and uses the same public monitoring-data access as
+history APIs, rather than the target-management admin token. Existing origin rules
+remain unchanged. Remote deployments still need the access controls described in
+Run locally. There is no email delivery, scheduled reporting, PDF report generation,
+or automatic aggregation in CSV exports.
+
 ## Checks
 
 From `backend/`:
@@ -887,7 +988,11 @@ filtered cursor pages, API validation, and retention cascades. DNS comparison te
 fallback, malformed/mismatched packets, NXDOMAIN, missing/unrelated A answers,
 timeouts and cancellation. Storage/report tests cover resolver identity, rollback,
 restart hydration, migration from v5, original-stat isolation, retention, ranges,
-trend counts and all-failed/null latency. Tests do not need public internet access. Target tests cover canonical validation, duplicates/limits,
+trend counts and all-failed/null latency. Export tests cover literal CSV escaping, inclusive bounds/type/target filters,
+header-only files, resolver fields, incident overlap/status/duration, cancellation,
+consumer errors, more than 1000 persisted cycles, early and late storage failures,
+real interrupted HTTP transfers, and request/concurrency limits. Tests do not need
+public internet access. Target tests cover canonical validation, duplicates/limits,
 serialized concurrent edits, persistence/empty restarts, migration from v4, write
 rollback, API authentication/origins/body/method/rate limits, bounded probe workers,
 per-target due times, in-flight reconfiguration, timeouts and cancellation.
@@ -914,7 +1019,9 @@ pagination, range resets, errors and empty reports. Target tests cover authentic
 interactions, private request headers, API errors, empty configuration, token
 locking and response validation. Resolver tests cover report/snapshot validation,
 historical identity, latency/failure displays, domain/range selection, empty states
-and API failures. DOM chart
+and API failures. Export tests cover URL encoding, completed streamed responses,
+browser size limits, cancellation, interrupted transfers, dataset/filter/range
+controls, API failures and object-URL cleanup. DOM chart
 containers have deterministic test dimensions; these tests do not replace visual
 browser verification. The added tools are devDependencies only.
 
@@ -924,6 +1031,7 @@ browser verification. The added tools are devDependencies only.
   Persisted summaries and new trend charts cover the full selected retained range.
 - Local origins and HTTP listen address remain configured in source code.
 - Target intervals are best-effort; slow batches can delay subsequent due probes.
+- Browser CSV downloads are capped at 32 MiB; server exports have a 60-second deadline.
 - Deleted history and cycles that failed persistence cannot be recovered.
 - Retention is based on age, not a disk-space quota; operators must provision disk.
 - Exact percentile sorting can be expensive on very large histories. Queries
@@ -936,8 +1044,8 @@ browser verification. The added tools are devDependencies only.
 - Stale status appears after 15 seconds without a snapshot. It is a dashboard
   diagnostic and does not establish that the monitored network is down.
 - Admin token authentication protects target management only. Public monitoring
-  APIs have no user authentication. CSV export and a full browser regression
-  suite remain pending. Avoid public exposure until deployment controls are added.
+  APIs and CSV exports have no user authentication. A full browser regression
+  suite remains pending. Avoid public exposure until deployment controls are added.
 
 Keep changes focused and tested. Read `AGENTS.md`, trace both sides of any API
 contract, and preserve the distinction between failed probes and valid latency.

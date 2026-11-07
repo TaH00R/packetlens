@@ -16,13 +16,15 @@ import (
 )
 
 type Handler struct {
+	exportLimit    exportLimit
+	exportSlots    chan struct{}
 	dnsResolvers   []string
 	store          store.Store
 	analyticsSlots chan struct{}
 }
 
 func NewHandler(s store.Store) *Handler {
-	return &Handler{store: s, analyticsSlots: make(chan struct{}, 2)}
+	return &Handler{store: s, analyticsSlots: make(chan struct{}, 2), exportSlots: make(chan struct{}, 1)}
 }
 
 func requireGET(w http.ResponseWriter, r *http.Request) bool {

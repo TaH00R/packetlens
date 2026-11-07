@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import DashboardSidebar from "@/components/dashboard/DashboardSidebar";
 import DashboardHeader from "@/components/dashboard/DashboardHeader";
 import TimeRangeSelector from "@/components/dashboard/TimeRangeSelector";
+import ExportControls from "@/components/dashboard/ExportControls";
 
 import { useMonitoring } from "@/context/MonitoringContext";
 
@@ -29,6 +30,7 @@ export default function DashboardShell({ children }: Props) {
 
         <div className="border-b border-white/[0.07] px-6 py-4">
           <TimeRangeSelector />
+          <ExportControls />
         </div>
 
         <nav aria-label="Mobile navigation" className="flex flex-wrap gap-4 border-b border-white/[0.07] px-5 py-3 text-sm lg:hidden">
