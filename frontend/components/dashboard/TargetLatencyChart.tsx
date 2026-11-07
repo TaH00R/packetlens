@@ -1,6 +1,6 @@
-
 "use client";
 
+import { chartGrid, chartTime, chartTooltipStyle } from "@/lib/chart-style";
 import { useMemo, useState } from "react";
 
 import {
@@ -14,10 +14,7 @@ import {
   YAxis,
 } from "recharts";
 
-import type {
-  MonitoringSnapshot,
-  ProbeResult,
-} from "@/types/metrics";
+import type { MonitoringSnapshot, ProbeResult } from "@/types/metrics";
 import type { LatencyAnomaly } from "@/types/anomalies";
 
 type ProbeType = "tcp" | "dns";
@@ -44,8 +41,7 @@ export default function TargetLatencyChart({
   initialType = "tcp",
   availableTypes = ["tcp", "dns"],
 }: Props) {
-  const [probeType, setProbeType] =
-    useState<ProbeType>(initialType);
+  const [probeType, setProbeType] = useState<ProbeType>(initialType);
 
   const recent = results;
 
@@ -53,8 +49,7 @@ export default function TargetLatencyChart({
     const unique = new Set<string>();
 
     recent.forEach((snapshot) => {
-      const probes =
-        probeType === "tcp" ? snapshot.tcp : snapshot.dns;
+      const probes = probeType === "tcp" ? snapshot.tcp : snapshot.dns;
 
       probes.forEach((probe) => {
         unique.add(probe.target);
@@ -64,29 +59,29 @@ export default function TargetLatencyChart({
     return Array.from(unique);
   }, [recent, probeType]);
 
-  const markers = (anomalies ?? []).filter((e) => e.type === probeType && targets.includes(e.target) && recent.length > 0 && Date.parse(e.cycle_timestamp) >= Date.parse(recent[0].timestamp) && Date.parse(e.cycle_timestamp) <= Date.parse(recent[recent.length-1].timestamp));
+  const markers = (anomalies ?? []).filter(
+    (e) =>
+      e.type === probeType &&
+      targets.includes(e.target) &&
+      recent.length > 0 &&
+      Date.parse(e.cycle_timestamp) >= Date.parse(recent[0].timestamp) &&
+      Date.parse(e.cycle_timestamp) <=
+        Date.parse(recent[recent.length - 1].timestamp),
+  );
 
   const chartData = useMemo(() => {
     return recent.map((snapshot) => {
       const probes: ProbeResult[] =
         probeType === "tcp" ? snapshot.tcp : snapshot.dns;
 
-      const point: Record<
-        string,
-        string | number | null
-      > = {
+      const point: Record<string, string | number | null> = {
         timestamp: new Date(snapshot.timestamp).getTime(),
       };
 
       targets.forEach((target) => {
-        const result = probes.find(
-          (probe) => probe.target === target
-        );
+        const result = probes.find((probe) => probe.target === target);
 
-        point[target] =
-          result && result.success
-            ? result.latency_ms
-            : null;
+        point[target] = result && result.success ? result.latency_ms : null;
       });
 
       return point;
@@ -98,9 +93,7 @@ export default function TargetLatencyChart({
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.07] p-5">
         <div>
-          <h3 className="font-medium text-white">
-            Target latency
-          </h3>
+          <h3 className="font-medium text-white">Target latency</h3>
 
           <p className="mt-1 text-xs text-gray-500">
             Compare latency across individual destinations
@@ -128,7 +121,12 @@ export default function TargetLatencyChart({
 
       {/* Chart content */}
       <div className="p-5">
-        {anomalies && <p className="mb-3 text-xs text-red-300">Red dots mark onset measurements from the newest loaded anomaly-feed page; older onsets may not be shown here.</p>}
+        {anomalies && (
+          <p className="mb-3 text-xs text-red-300">
+            Red dots mark onset measurements from the newest loaded anomaly-feed
+            page; older onsets may not be shown here.
+          </p>
+        )}
         {targets.length === 0 ? (
           <div className="flex h-[300px] items-center justify-center text-sm text-gray-500">
             Waiting for measurements...
@@ -145,8 +143,7 @@ export default function TargetLatencyChart({
                   <span
                     className="h-2 w-2 rounded-full"
                     style={{
-                      backgroundColor:
-                        COLORS[index % COLORS.length],
+                      backgroundColor: COLORS[index % COLORS.length],
                     }}
                   />
 
@@ -167,31 +164,22 @@ export default function TargetLatencyChart({
                     bottom: 0,
                   }}
                 >
-                  <CartesianGrid
-                    stroke="#26313d"
-                    strokeDasharray="3 3"
-                    vertical={false}
-                  />
+                  <CartesianGrid {...chartGrid} />
 
                   <XAxis
                     dataKey="timestamp"
                     type="number"
                     scale="time"
                     domain={["dataMin", "dataMax"]}
-                    tickFormatter={(value: number) =>
-                      new Date(value).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        second: "2-digit",
-                      })
-                    }
+                    tickFormatter={chartTime}
                     tick={{
                       fill: "#8492a6",
                       fontSize: 11,
                     }}
                     axisLine={false}
                     tickLine={false}
-                    minTickGap={35}
+                    minTickGap={75}
+                    tickMargin={10}
                   />
 
                   <YAxis
@@ -201,28 +189,17 @@ export default function TargetLatencyChart({
                     }}
                     axisLine={false}
                     tickLine={false}
-                    width={45}
-                    tickFormatter={(value: number) =>
-                      `${value} ms`
-                    }
+                    width={65}
+                    tickFormatter={(value: number) => `${value} ms`}
                   />
 
                   <Tooltip
-                    contentStyle={{
-                      backgroundColor: "#111820",
-                      border: "1px solid #26313d",
-                      borderRadius: "10px",
-                      color: "#fff",
-                    }}
+                    contentStyle={chartTooltipStyle}
                     labelFormatter={(value) =>
-                      new Date(
-                        Number(value)
-                      ).toLocaleTimeString()
+                      new Date(Number(value)).toLocaleTimeString()
                     }
                     formatter={(value, name) => [
-                      value == null
-                        ? "No measurement"
-                        : `${value} ms`,
+                      value == null ? "No measurement" : `${value} ms`,
                       String(name),
                     ]}
                   />
@@ -233,17 +210,31 @@ export default function TargetLatencyChart({
                       type="monotone"
                       dataKey={(point) => point[target]}
                       name={target}
-                      stroke={
-                        COLORS[index % COLORS.length]
+                      stroke={COLORS[index % COLORS.length]}
+                      strokeWidth={2.5}
+                      strokeLinecap="round"
+                      dot={
+                        chartData.filter((point) => point[target] !== null)
+                          .length <= 3
+                          ? { r: 3, strokeWidth: 0 }
+                          : false
                       }
-                      strokeWidth={2}
-                      dot={false}
-                      activeDot={{ r: 4 }}
+                      activeDot={{ r: 5, stroke: "#111820", strokeWidth: 2 }}
                       connectNulls={false}
                       isAnimationActive={false}
                     />
                   ))}
-                  {markers.map((e) => <ReferenceDot key={e.id} x={Date.parse(e.cycle_timestamp)} y={e.observed_latency_ms} r={4} fill="#F87171" stroke="#F87171" ifOverflow="extendDomain" />)}
+                  {markers.map((e) => (
+                    <ReferenceDot
+                      key={e.id}
+                      x={Date.parse(e.cycle_timestamp)}
+                      y={e.observed_latency_ms}
+                      r={4}
+                      fill="#F87171"
+                      stroke="#F87171"
+                      ifOverflow="extendDomain"
+                    />
+                  ))}
                 </LineChart>
               </ResponsiveContainer>
             </div>

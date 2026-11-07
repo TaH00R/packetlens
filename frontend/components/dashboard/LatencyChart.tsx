@@ -1,6 +1,6 @@
-
 "use client";
 
+import { chartGrid, chartTime, chartTooltipStyle } from "@/lib/chart-style";
 import { useMemo } from "react";
 
 import {
@@ -28,17 +28,12 @@ function calculateAverage(results: ProbeResult[]): number | null {
 
   if (successful.length === 0) return null;
 
-  const total = successful.reduce(
-    (sum, result) => sum + result.latency_ms,
-    0
-  );
+  const total = successful.reduce((sum, result) => sum + result.latency_ms, 0);
 
   return Number((total / successful.length).toFixed(2));
 }
 
-export default function LatencyChart({
-  results,
-}: LatencyChartProps) {
+export default function LatencyChart({ results }: LatencyChartProps) {
   const chartData = useMemo<LatencyPoint[]>(() => {
     return results.map((snapshot) => ({
       timestamp: new Date(snapshot.timestamp).getTime(),
@@ -47,8 +42,12 @@ export default function LatencyChart({
     }));
   }, [results]);
 
-  if (chartData.length === 0) {
-    return <p className="flex h-[320px] items-center justify-center text-sm text-gray-400">No measurements in the selected time range.</p>;
+  if (!chartData.some((point) => point.tcp !== null || point.dns !== null)) {
+    return (
+      <p className="flex h-[320px] items-center justify-center text-sm text-gray-400">
+        No measurements in the selected time range.
+      </p>
+    );
   }
 
   return (
@@ -58,45 +57,31 @@ export default function LatencyChart({
           data={chartData}
           margin={{ top: 10, right: 20, left: 0, bottom: 0 }}
         >
-          <CartesianGrid
-            stroke="#26313d"
-            strokeDasharray="3 3"
-            vertical={false}
-          />
+          <CartesianGrid {...chartGrid} />
 
           <XAxis
             dataKey="timestamp"
             type="number"
             scale="time"
             domain={["dataMin", "dataMax"]}
-            tickFormatter={(value) =>
-              new Date(value).toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-              })
-            }
+            tickFormatter={chartTime}
             tick={{ fill: "#8492a6", fontSize: 11 }}
             axisLine={false}
             tickLine={false}
-            minTickGap={35}
+            minTickGap={75}
+            tickMargin={10}
           />
 
           <YAxis
             tick={{ fill: "#8492a6", fontSize: 11 }}
             axisLine={false}
             tickLine={false}
-            width={45}
+            width={65}
             tickFormatter={(value) => `${value} ms`}
           />
 
           <Tooltip
-            contentStyle={{
-              backgroundColor: "#111820",
-              border: "1px solid #26313d",
-              borderRadius: "10px",
-              color: "#fff",
-            }}
+            contentStyle={chartTooltipStyle}
             labelStyle={{ color: "#94a3b8" }}
             labelFormatter={(value) =>
               new Date(Number(value)).toLocaleTimeString()
@@ -112,9 +97,14 @@ export default function LatencyChart({
             dataKey="tcp"
             name="tcp"
             stroke="#14B8A6"
-            strokeWidth={2}
-            dot={false}
-            activeDot={{ r: 4 }}
+            strokeWidth={2.5}
+            strokeLinecap="round"
+            dot={
+              chartData.filter((point) => point.tcp !== null).length <= 3
+                ? { r: 3, strokeWidth: 0 }
+                : false
+            }
+            activeDot={{ r: 5, stroke: "#111820", strokeWidth: 2 }}
             connectNulls={false}
             isAnimationActive={false}
           />
@@ -124,9 +114,14 @@ export default function LatencyChart({
             dataKey="dns"
             name="dns"
             stroke="#3B82F6"
-            strokeWidth={2}
-            dot={false}
-            activeDot={{ r: 4 }}
+            strokeWidth={2.5}
+            strokeLinecap="round"
+            dot={
+              chartData.filter((point) => point.dns !== null).length <= 3
+                ? { r: 3, strokeWidth: 0 }
+                : false
+            }
+            activeDot={{ r: 5, stroke: "#111820", strokeWidth: 2 }}
             connectNulls={false}
             isAnimationActive={false}
           />

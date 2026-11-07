@@ -1,26 +1,21 @@
 @import "tailwindcss";
-
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
+:root { color-scheme: dark; --background: #0B1016; --foreground: #e2e8f0; }
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+ --color-background: var(--background);
+ --color-foreground: var(--foreground);
+ --font-sans: Arial, Helvetica, sans-serif;
+ --font-mono: Consolas, monospace;
 }
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-}
+body { margin: 0; background: var(--background); color: var(--foreground); font-family: Arial, Helvetica, sans-serif; }
+button, input, select, summary, a { -webkit-tap-highlight-color: transparent; }
+button:not(:disabled), select:not(:disabled), summary { cursor: pointer; }
+:focus-visible { outline: 2px solid #2dd4bf; outline-offset: 4px; }
+[role="tabpanel"]:focus-visible { outline-offset: 6px; border-radius: 12px; }
+.recharts-wrapper { outline: none; }
+.recharts-surface { overflow: visible; }
+.recharts-tooltip-wrapper { max-width: min(340px, 85vw); }
+.recharts-default-tooltip { white-space: normal !important; overflow-wrap: anywhere; }
+.recharts-legend-wrapper { font-size: 11px; }
+table { font-variant-numeric: tabular-nums; }
+input, select { min-height: 38px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }

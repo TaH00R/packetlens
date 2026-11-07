@@ -40,3 +40,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Browser verification artifacts.
+/test-results/
+/playwright-report/
+
+# Next dev generates framework guidance locally.
+/AGENTS.md

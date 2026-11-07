@@ -1,29 +1,262 @@
 "use client";
 import { useState } from "react";
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { useMonitoring } from "@/context/MonitoringContext";
+import {
+  chartGrid,
+  chartTick,
+  chartTime,
+  chartTooltipStyle,
+} from "@/lib/chart-style";
 import { formatMs } from "@/lib/analytics";
 const colors = ["#14B8A6", "#3B82F6", "#A78BFA", "#FBBF24"];
 export default function ResolverComparison() {
-  const { resolverReport, resolversStale } = useMonitoring(); const [target, setTarget] = useState(""); const report = resolverReport.data;
-  const domains = [...new Set(report?.targets.map(t => t.target) ?? [])].sort(); const selected = domains.includes(target) ? target : "";
-  const summaries = selected ? report?.targets.filter(t => t.target === selected) ?? [] : report?.groups ?? [];
-  const points = Array.from({ length: summaries[0]?.trend.length ?? 0 }, (_, i) => {
-    const point: Record<string, number | null> = { timestamp: Date.parse(summaries[0].trend[i].timestamp) };
-    summaries.forEach((summary, index) => { point[`r${index}`] = summary.trend[i].avg_latency_ms }); return point;
-  });
-  return <section className="space-y-4" aria-label="DNS resolver comparison">
-    <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-xl font-medium">DNS resolver comparison</h2><p className="mt-2 max-w-3xl text-xs leading-6 text-gray-400">Direct recursive A-record queries to configured resolvers. Successful latency only; failures leave gaps. These measurements are separate from system DNS timing, which may use hosts files, search rules and A/AAAA lookups. Resolver caching affects results.</p></div><label className="text-xs text-gray-300">Domain <select aria-label="Resolver comparison domain" className="ml-2 max-w-full rounded-lg border border-white/10 bg-[#111820] p-2" value={selected} onChange={e => setTarget(e.target.value)} disabled={!domains.length}><option value="">All domains</option>{domains.map(domain => <option key={domain} value={domain}>{domain}</option>)}</select></label></div>
-    {resolverReport.loading && <p role="status" className="text-sm text-gray-400">Loading resolver comparisons...</p>}
-    {resolverReport.error && <p role="alert" className="text-sm text-amber-300">{resolverReport.error}</p>}
-    {resolversStale && <p role="status" className="text-sm text-amber-300">This resolver report is stale. Check the last failure and observation window before interpreting it.</p>}
-    {report && <p className="text-xs text-gray-400">Selection: {new Date(report.from).toLocaleString()} to {new Date(report.to).toLocaleString()}. Configured now: {report.configured_resolvers.join(", ") || "none"}. Retained results can include previously configured resolvers.</p>}
-    {report && summaries.length === 0 && <p className="rounded-xl border border-white/10 bg-[#111820] p-5 text-sm leading-6 text-gray-400">No resolver comparison measurements in this selection. Configure PACKETLENS_DNS_RESOLVERS on the backend with up to three comma-separated IP:port endpoints and restart it. Enabled DNS targets will then be queried at their configured intervals. Existing system DNS monitoring continues.</p>}
-    {summaries.length > 0 && <>
-      <div className="overflow-x-auto rounded-xl border border-white/10 bg-[#111820]"><table className="w-full text-left text-xs"><caption className="p-4 text-left text-sm text-gray-300">Observed resolver outcomes {selected && `for ${selected}`}</caption><thead className="text-gray-400"><tr>{["Resolver", "Attempts", "Successful", "Failed", "Timeouts", "Mean", "Min / Max"].map(v => <th key={v} scope="col" className="whitespace-nowrap px-4 py-3">{v}</th>)}</tr></thead><tbody>{summaries.map(s => <tr key={s.resolver} className="border-t border-white/10 text-gray-300"><th scope="row" className="whitespace-nowrap px-4 py-3 font-medium">{s.resolver}</th><td className="px-4 py-3">{s.attempts}</td><td className="px-4 py-3">{s.successful}</td><td className="px-4 py-3 text-red-300">{s.failed}</td><td className="px-4 py-3 text-amber-300">{s.timeouts}</td><td className="whitespace-nowrap px-4 py-3">{formatMs(s.avg_latency_ms)}</td><td className="whitespace-nowrap px-4 py-3">{formatMs(s.min_latency_ms)} / {formatMs(s.max_latency_ms)}</td></tr>)}</tbody></table></div>
-      <div className="rounded-xl border border-white/10 bg-[#111820] p-5"><h3 className="mb-3 text-sm font-medium">Resolver latency over time (ms)</h3>{summaries.every(s => s.successful === 0) ? <p className="text-sm text-gray-400">No successful resolver measurements. Failed requests are not zero-latency results.</p> : <div className="h-72 min-w-0"><ResponsiveContainer width="100%" height="100%"><LineChart data={points}><CartesianGrid stroke="#ffffff0d" /><XAxis dataKey="timestamp" type="number" domain={["dataMin", "dataMax"]} tickFormatter={v => new Date(v).toLocaleTimeString()} stroke="#9CA3AF" minTickGap={45} /><YAxis unit=" ms" stroke="#9CA3AF" /><Tooltip labelFormatter={v => new Date(Number(v)).toLocaleString()} contentStyle={{ backgroundColor: "#111820", borderColor: "#ffffff20", color: "#ddd" }} formatter={v => typeof v === "number" ? `${v.toFixed(2)} ms` : "No data"} /><Legend />{summaries.map((s, index) => <Line key={s.resolver} name={s.resolver} dataKey={`r${index}`} stroke={colors[index % colors.length]} dot={false} connectNulls={false} isAnimationActive={false} />)}</LineChart></ResponsiveContainer></div>}</div>
-      <ul aria-label="Resolver failures" className="space-y-2">{summaries.filter(s => s.failed > 0).map(s => <li key={s.resolver} className="break-words rounded-lg border border-amber-500/20 p-3 text-xs leading-6 text-amber-200">{s.resolver}: {s.failed} failed queries, including {s.timeouts} timeouts. Last failure {s.last_failure_at ? new Date(s.last_failure_at).toLocaleString() : "unknown"}: {s.last_error || "No detail recorded"}.</li>)}</ul>
-      <p className="text-xs leading-6 text-gray-400">Means weight successful observations, so different domain mixes and sample counts can affect comparisons. Timeouts are a subset of failures. DNS failures do not establish a resolver outage or a confirmed network cause.</p>
-    </>}
-  </section>;
+  const { resolverReport, resolversStale } = useMonitoring();
+  const [target, setTarget] = useState("");
+  const report = resolverReport.data;
+  const domains = [
+    ...new Set(report?.targets.map((t) => t.target) ?? []),
+  ].sort();
+  const selected = domains.includes(target) ? target : "";
+  const summaries = selected
+    ? (report?.targets.filter((t) => t.target === selected) ?? [])
+    : (report?.groups ?? []);
+  const points = Array.from(
+    { length: summaries[0]?.trend.length ?? 0 },
+    (_, i) => {
+      const point: Record<string, number | null> = {
+        timestamp: Date.parse(summaries[0].trend[i].timestamp),
+      };
+      summaries.forEach((summary, index) => {
+        point[`r${index}`] = summary.trend[i].avg_latency_ms;
+      });
+      return point;
+    },
+  );
+  return (
+    <section className="space-y-4" aria-label="DNS resolver comparison">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-medium">DNS resolver comparison</h2>
+          <p className="mt-2 max-w-3xl text-xs leading-6 text-gray-400">
+            Direct recursive A-record queries to configured resolvers.
+            Successful latency only; failures leave gaps. These measurements are
+            separate from system DNS timing, which may use hosts files, search
+            rules and A/AAAA lookups. Resolver caching affects results.
+          </p>
+        </div>
+        <label className="text-xs text-gray-300">
+          Domain{" "}
+          <select
+            aria-label="Resolver comparison domain"
+            className="ml-2 max-w-full rounded-lg border border-white/10 bg-[#111820] p-2"
+            value={selected}
+            onChange={(e) => setTarget(e.target.value)}
+            disabled={!domains.length}
+          >
+            <option value="">All domains</option>
+            {domains.map((domain) => (
+              <option key={domain} value={domain}>
+                {domain}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {resolverReport.loading && (
+        <p role="status" className="text-sm text-gray-400">
+          Loading resolver comparisons...
+        </p>
+      )}
+      {resolverReport.error && (
+        <p role="alert" className="text-sm text-amber-300">
+          {resolverReport.error}
+        </p>
+      )}
+      {resolversStale && (
+        <p role="status" className="text-sm text-amber-300">
+          This resolver report is stale. Check the last failure and observation
+          window before interpreting it.
+        </p>
+      )}
+      {report && (
+        <p className="text-xs text-gray-400">
+          Selection: {new Date(report.from).toLocaleString()} to{" "}
+          {new Date(report.to).toLocaleString()}. Configured now:{" "}
+          {report.configured_resolvers.join(", ") || "none"}. Retained results
+          can include previously configured resolvers.
+        </p>
+      )}
+      {report && summaries.length === 0 && (
+        <p className="rounded-xl border border-white/10 bg-[#111820] p-5 text-sm leading-6 text-gray-400">
+          No resolver comparison measurements in this selection. Configure
+          PACKETLENS_DNS_RESOLVERS on the backend with up to three
+          comma-separated IP:port endpoints and restart it. Enabled DNS targets
+          will then be queried at their configured intervals. Existing system
+          DNS monitoring continues.
+        </p>
+      )}
+      {summaries.length > 0 && (
+        <>
+          <div className="overflow-x-auto rounded-xl border border-white/10 bg-[#111820]">
+            <table className="w-full text-left text-xs">
+              <caption className="p-4 text-left text-sm text-gray-300">
+                Observed resolver outcomes {selected && `for ${selected}`}
+              </caption>
+              <thead className="text-gray-400">
+                <tr>
+                  {[
+                    "Resolver",
+                    "Attempts",
+                    "Successful",
+                    "Failed",
+                    "Timeouts",
+                    "Mean",
+                    "Minimum",
+                    "Maximum",
+                  ].map((v) => (
+                    <th
+                      key={v}
+                      scope="col"
+                      className="whitespace-nowrap px-4 py-3"
+                    >
+                      {v}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {summaries.map((s) => (
+                  <tr
+                    key={s.resolver}
+                    className="border-t border-white/10 text-gray-300"
+                  >
+                    <th
+                      scope="row"
+                      className="whitespace-nowrap px-4 py-3 font-medium"
+                    >
+                      {s.resolver}
+                    </th>
+                    <td className="px-4 py-3">{s.attempts}</td>
+                    <td className="px-4 py-3">{s.successful}</td>
+                    <td className="px-4 py-3 text-red-300">{s.failed}</td>
+                    <td className="px-4 py-3 text-amber-300">{s.timeouts}</td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      {formatMs(s.avg_latency_ms)}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      {formatMs(s.min_latency_ms)}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      {formatMs(s.max_latency_ms)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-[#111820] p-5">
+            <h3 className="mb-3 text-sm font-medium">
+              Resolver latency over time (ms)
+            </h3>
+            {summaries.every((s) => s.successful === 0) ? (
+              <p className="text-sm text-gray-400">
+                No successful resolver measurements. Failed requests are not
+                zero-latency results.
+              </p>
+            ) : (
+              <div className="h-72 min-w-0">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={points}>
+                    <CartesianGrid {...chartGrid} />
+                    <XAxis
+                      dataKey="timestamp"
+                      type="number"
+                      domain={["dataMin", "dataMax"]}
+                      tickFormatter={chartTime}
+                      tick={chartTick}
+                      axisLine={false}
+                      tickLine={false}
+                      minTickGap={75}
+                      tickMargin={10}
+                    />
+                    <YAxis
+                      width={70}
+                      unit=" ms"
+                      tick={chartTick}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      labelFormatter={(v) =>
+                        new Date(Number(v)).toLocaleString()
+                      }
+                      contentStyle={chartTooltipStyle}
+                      formatter={(v) =>
+                        typeof v === "number" ? `${v.toFixed(2)} ms` : "No data"
+                      }
+                    />
+                    <Legend />
+                    {summaries.map((s, index) => (
+                      <Line
+                        key={s.resolver}
+                        name={s.resolver}
+                        dataKey={`r${index}`}
+                        type="monotone"
+                        strokeWidth={2.5}
+                        strokeLinecap="round"
+                        activeDot={{ r: 5, stroke: "#111820", strokeWidth: 2 }}
+                        stroke={colors[index % colors.length]}
+                        dot={
+                          s.trend.filter(
+                            (point) => point.avg_latency_ms !== null,
+                          ).length <= 3
+                            ? { r: 3, strokeWidth: 0 }
+                            : false
+                        }
+                        connectNulls={false}
+                        isAnimationActive={false}
+                      />
+                    ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+          <ul aria-label="Resolver failures" className="space-y-2">
+            {summaries
+              .filter((s) => s.failed > 0)
+              .map((s) => (
+                <li
+                  key={s.resolver}
+                  className="break-words rounded-lg border border-amber-500/20 p-3 text-xs leading-6 text-amber-200"
+                >
+                  {s.resolver}: {s.failed} failed queries, including{" "}
+                  {s.timeouts} timeouts. Last failure{" "}
+                  {s.last_failure_at
+                    ? new Date(s.last_failure_at).toLocaleString()
+                    : "unknown"}
+                  : {s.last_error || "No detail recorded"}.
+                </li>
+              ))}
+          </ul>
+          <p className="text-xs leading-6 text-gray-400">
+            Means weight successful observations, so different domain mixes and
+            sample counts can affect comparisons. Timeouts are a subset of
+            failures. DNS failures do not establish a resolver outage or a
+            confirmed network cause.
+          </p>
+        </>
+      )}
+    </section>
+  );
 }
