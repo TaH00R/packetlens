@@ -21,6 +21,7 @@ export default function DashboardHeader({
     "/dns": "DNS Analytics",
     "/health": "Network Health",
     "/incidents": "Failure Incidents",
+    "/targets": "Monitoring Targets",
     "/learn": "Understanding Metrics",
   };
 

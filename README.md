@@ -22,6 +22,7 @@ Use it only for destinations you own or are authorized to monitor.
 - Validated payloads, deduplication, chronological merging, and automatic reconnects
   with a delay from 1 to 15 seconds.
 - Loading, history-error, connection, empty, and stale measurement messages.
+- Authenticated target management with persisted per-target intervals/timeouts and bounded scheduling.
 - Desktop sidebar and mobile navigation.
 
 ## Stack and layout
@@ -45,6 +46,7 @@ packetlens/
 |   |   |-- incident/     # Sustained observed failure and recovery state machine
 |   |   |-- api/          # HTTP and WebSocket handlers
 |   |   |-- monitor/      # Complete monitoring cycles and types
+|   |   |-- target/       # Validated configuration and serialized management
 |   |   |-- probe/        # TCP and DNS checks
 |   |   |-- realtime/     # Client registration and snapshot broadcast
 |   |   |-- store/        # Storage interface, SQLite, migrations, retention, test memory store
@@ -117,16 +119,17 @@ npm run start
 ```
 
 This is a local development setup. Remote deployment needs deliberate origin
-configuration, HTTPS/WSS, and access controls; do not expose the unauthenticated
-API directly to the public internet.
+configuration, HTTPS/WSS, and access controls. Target management requires a private
+admin token, but monitoring/history APIs are still unauthenticated; do not expose
+the backend directly to the public internet.
 
 ## Monitoring and configuration
 
-`backend/cmd/packetlens/main.go` currently configures:
+Default configuration (targets are seeded once by migration 005):
 
 | Setting | Current value |
 | --- | --- |
-| Monitoring interval | 5 seconds |
+| Default per-target interval | 5 seconds |
 | TCP targets | `1.1.1.1:443`, `8.8.8.8:443` |
 | DNS domains | `google.com`, `cloudflare.com` |
 | Backend storage | SQLite at `data/packetlens.db` |
@@ -135,8 +138,10 @@ API directly to the public internet.
 | Default history page | Latest 1,000 cycles |
 | HTTP address | `:8080` (in `internal/api/server.go`) |
 
-Targets, probe interval, and HTTP address still require code changes and a restart.
-Both probe types use a 3-second timeout and respect parent cancellation.
+Targets, enabled state, intervals, and timeouts are editable through `/targets`
+when management is enabled. Their persisted values replace the defaults across
+restarts. The HTTP address still requires a code change. Both probe types default
+to a 3-second timeout and respect parent cancellation.
 
 Storage configuration is read from process environment variables at startup:
 
@@ -161,10 +166,14 @@ Use `720h`, not `30d`: Go duration syntax does not accept days. Invalid settings
 unreadable/corrupt databases, and unsupported newer schema versions stop startup
 with an error. The application never silently replaces a damaged database.
 
-A cycle waits for all its probes before storing and broadcasting a snapshot.
+A cycle groups the targets due at dispatch and waits for all selected probes before
+storing and broadcasting a snapshot. Different per-target intervals can mean only
+a subset of enabled targets is included. No probe result is fabricated for targets
+that are not due.
 The snapshot and its probe rows are committed together in one transaction.
 Stored snapshots have an additive `id` field shared by REST and live messages.
-The collector runs immediately at startup and then on the interval. Slow
+The collector schedules enabled targets immediately at startup, then uses each
+target's interval. Slow
 WebSocket clients are disconnected when their 64-snapshot queue fills; writes
 have a 5-second timeout. Queue drops and write failures are logged. Shutdown
 cancels collection and pending database work, closes client queues, waits for
@@ -186,6 +195,8 @@ JSON error with status 503. Health also returns 503 when the database is unreach
 | GET | `/api/anomalies` | Bounded, filtered anomaly episode feed |
 | GET | `/api/incidents` | Incident history, filtered pages, open/recovered totals |
 | GET | `/api/correlations` | Bounded possible shared connectivity event feed |
+| GET / POST | `/api/targets` | Authenticated target list / creation |
+| PUT / DELETE | `/api/targets/{id}` | Authenticated replacement / removal |
 | GET | `/api/availability` | Fixed-window observed availability, streaks, last outcomes |
 | GET | `/api/snapshots` | `count`, `snapshots`, `has_more`, `next_cursor` |
 | WebSocket | `/api/ws` | One snapshot per new monitoring cycle |
@@ -658,6 +669,103 @@ older pages, and the global time range use the existing shared pagination logic.
 Loading, errors, empty selections, stale reports, affected targets and ended
 overlaps have explicit states. Labels do not assert a confirmed root cause.
 
+## Target management and scheduling
+
+Migration 005 seeds the original two TCP and two DNS targets exactly once. Removing
+all targets intentionally leaves an empty configuration across backend restarts;
+defaults are not silently recreated. Target settings are independent of retention
+and measurement tables, so editing or removing one never deletes its history.
+
+Management is disabled unless the backend process has `PACKETLENS_ADMIN_TOKEN` set.
+Use a randomly generated secret of 32..256 printable ASCII characters without spaces.
+For example, generate a 64-character value locally using Node:
+
+```bash
+node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Set the generated value in the backend process environment and restart the backend.
+Do not commit it, put it in a URL, or use a `NEXT_PUBLIC_*` variable. Open `/targets`
+and enter the same value to unlock management. The frontend keeps it only in
+component memory, sends it as `Authorization: Bearer <token>`, and clears it on
+lock/navigation/reload. It is not stored in cookies, localStorage or sessionStorage.
+Use HTTPS before transmitting the token beyond local development. This is one
+operator credential, not multi-user login or role-based authorization.
+
+GET, POST, PUT and DELETE all require that token. Authentication uses a constant-time
+comparison of fixed-size hashes. Browser requests must use the existing allowed
+local frontend origins. CORS preflight permits Authorization and Content-Type only
+on management routes; it does not add wildcard origins or cookie credentials.
+A single bounded token bucket limits management requests to 30 initially, refilling
+one request every two seconds, including invalid authentication attempts. Excess
+requests receive JSON 429 with Retry-After. This local process limit is not a
+replacement for deployment-level protection against distributed abuse.
+
+Endpoints:
+
+- `GET /api/targets`: `{count, targets}` for the currently applied configuration.
+- `POST /api/targets`: creates a target and returns its configuration with a new ID
+  (201). The body requires `type`, `address`, `enabled`, `interval_ms`, `timeout_ms`.
+- `PUT /api/targets/{id}`: replaces all five editable fields (200).
+- `DELETE /api/targets/{id}`: removes the target (200, `{deleted:true}`).
+
+Use `Content-Type: application/json` for POST/PUT. Bodies are limited to 4 KiB;
+unknown or missing fields, trailing JSON, malformed IDs and invalid configuration
+receive JSON 400. Invalid credentials receive 401; rejected origins 403; missing
+IDs 404; unsupported methods 405; duplicate type/address pairs or more than 32
+targets 409; incorrect content type 415. Disabled management and database failures
+return JSON 503. GET returns the in-process configuration from the last successful
+save, rather than performing a database health check. Responses use `no-store`.
+Each write has a five-second context deadline, and no token is logged.
+
+Validation and limits:
+
+- Maximum 32 targets, including disabled ones; duplicates are rejected after
+  canonicalization. IDs are stable lowercase 32-character hexadecimal strings.
+- TCP: a hostname or IP plus port 1..65535, with brackets around IPv6. Hostnames
+  are lowercase ASCII DNS-style labels; a final dot is removed. IPs and numeric
+  ports are canonicalized. Unspecified/multicast IPs, zone-qualified IPv6,
+  URLs, paths and wildcard names are rejected. Private and loopback destinations
+  are allowed for authorized local monitoring.
+- DNS: an ASCII hostname/domain, without a scheme, port, path or wildcard. IP
+  literals are rejected. Use punycode for internationalized domain names.
+- Interval: 5000..3600000 milliseconds. Timeout: 100..30000 milliseconds and no
+  greater than the interval. Settings apply to both TCP and DNS.
+
+The manager serializes edits, validates the complete bounded configuration, and
+replaces the SQLite rows in one transaction. Only after a successful commit does it
+publish a copied configuration to the scheduler. Failed saves leave the current
+configuration untouched. A process crash after commit is safe: the next startup
+loads the committed configuration. Use one backend process per database; independent
+writers or manual SQL edits while running are unsupported. Multiple browser tabs
+can have stale editors; refresh before editing when another operator has changed
+settings. The latest accepted full target replacement wins.
+
+The existing monitoring loop now tracks due times by stable target ID, uses at most
+eight workers, and gives each operation its configured context timeout. One cycle
+contains the complete result set for the targets selected at dispatch. Unchanged
+targets keep due times; edited or newly enabled targets become due on the next cycle.
+An in-flight cycle finishes with its captured configuration, so a disabled/removed
+or edited target may produce one final observation under its previous settings.
+Reconfiguration never changes a partially assembled snapshot. When all targets are
+disabled/removed, no empty snapshots are emitted; the dashboard can correctly show
+stale measurements. Shutdown cancels probes, stops scheduling, and closes results.
+
+Intervals are best-effort due times, not a promise of an exact sampling cadence.
+A full batch of slow targets, database backpressure or a stalled runtime can delay
+other due targets. Missed intervals are skipped, never replayed as catch-up bursts.
+The maximum active probe concurrency remains eight regardless of configuration.
+Existing incident gap policies should be adjusted when choosing longer intervals;
+disabling a target does not assert recovery or close its unresolved incident.
+Historical analytics/detectors still identify targets by probe type and address,
+so changing an address creates a new historical identity; reusing an old address
+continues its retained history and detector state. Frequent address churn also
+counts toward existing analytics/correlation identity limits documented above.
+
+The `/targets` page provides add/edit forms, explicit enable/disable controls,
+removal confirmation, refresh, empty states, visible API errors, and pending states.
+Only networks the operator owns or is authorized to monitor should be configured.
+
 ## Checks
 
 From `backend/`:
@@ -685,7 +793,10 @@ Correlation tests cover inclusive windows, distinct target names, superseding
 successes, expired observations, monitoring gaps, policy retention, out-of-order
 cycles, limits, concurrent writes, restart continuity, rollback, migration from v3,
 filtered cursor pages, API validation, and retention cascades. Tests do not need
-public internet access.
+public internet access. Target tests cover canonical validation, duplicates/limits,
+serialized concurrent edits, persistence/empty restarts, migration from v4, write
+rollback, API authentication/origins/body/method/rate limits, bounded probe workers,
+per-target due times, in-flight reconfiguration, timeouts and cancellation.
 
 From `frontend/`:
 
@@ -705,7 +816,9 @@ and visible onset markers. Incident tests verify lifecycle validation/rendering,
 zero-duration recovery, gap warnings, API errors, status/probe filters, pagination,
 and range changes while viewing older pages. Correlation tests cover payload
 validation, affected targets, uncertainty warnings, ended overlaps, filters,
-pagination, range resets, errors and empty reports. DOM chart
+pagination, range resets, errors and empty reports. Target tests cover authentication, add/edit/toggle/removal
+interactions, private request headers, API errors, empty configuration, token
+locking and response validation. DOM chart
 containers have deterministic test dimensions; these tests do not replace visual
 browser verification. The added tools are devDependencies only.
 
@@ -713,7 +826,8 @@ browser verification. The added tools are devDependencies only.
 
 - Recent raw activity/chart sections remain limited to 1,000 cached cycles.
   Persisted summaries and new trend charts cover the full selected retained range.
-- Targets, probe interval, and local origins remain configured in source code.
+- Local origins and HTTP listen address remain configured in source code.
+- Target intervals are best-effort; slow batches can delay subsequent due probes.
 - Deleted history and cycles that failed persistence cannot be recovered.
 - Retention is based on age, not a disk-space quota; operators must provision disk.
 - Exact percentile sorting can be expensive on very large histories. Queries
@@ -725,8 +839,9 @@ browser verification. The added tools are devDependencies only.
   verified shared infrastructure; missing measurements can end the overlap.
 - Stale status appears after 15 seconds without a snapshot. It is a dashboard
   diagnostic and does not establish that the monitored network is down.
-- There is no authentication, target-management UI, CSV export, or full browser
-  regression suite. Avoid public exposure until deployment controls are added.
+- Admin token authentication protects target management only. Public monitoring
+  APIs have no user authentication. CSV export and a full browser regression
+  suite remain pending. Avoid public exposure until deployment controls are added.
 
 Keep changes focused and tested. Read `AGENTS.md`, trace both sides of any API
 contract, and preserve the distinction between failed probes and valid latency.

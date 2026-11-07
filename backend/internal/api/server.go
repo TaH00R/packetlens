@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/TaH00R/packetlens/backend/internal/realtime"
@@ -11,12 +12,20 @@ import (
 func NewServer(
 	s store.Store,
 	hub *realtime.Hub,
+	admin ...*TargetAdmin,
 ) *http.Server {
 	handler := NewHandler(s)
 
 	wsHandler := NewWebSocketHandler(hub)
 
 	mux := http.NewServeMux()
+	var settings *TargetAdmin
+	if len(admin) > 0 {
+		settings = admin[0]
+	}
+	targets := newTargetHandler(settings)
+	mux.Handle("/api/targets", targets)
+	mux.Handle("/api/targets/", targets)
 
 	mux.HandleFunc("/api/health", handler.Health)
 	mux.HandleFunc("/api/metrics", handler.Metrics)
@@ -44,6 +53,10 @@ func localCORS(next http.Handler) http.Handler {
 		case "http://localhost:3000", "http://127.0.0.1:3000":
 			w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
 			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			if r.URL.Path == "/api/targets" || strings.HasPrefix(r.URL.Path, "/api/targets/") {
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			}
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
 				return

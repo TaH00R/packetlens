@@ -36,3 +36,14 @@ func TestDNSDeadline(t *testing.T) {
 		t.Fatalf("local literal lookup: %+v", result)
 	}
 }
+
+func TestConfiguredProbeTimeoutsRespectCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if p := CheckTCPWithTimeout(ctx, "127.0.0.1:443", 20*time.Second); p.Success || p.Error == "" {
+		t.Fatal(p)
+	}
+	if p := CheckDNSWithTimeout(ctx, "timeout.invalid", 20*time.Second); p.Success || p.Error == "" {
+		t.Fatal(p)
+	}
+}

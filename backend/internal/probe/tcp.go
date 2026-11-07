@@ -14,10 +14,14 @@ type TCPResult struct {
 }
 
 func CheckTCP(ctx context.Context, target string) TCPResult {
+	return CheckTCPWithTimeout(ctx, target, 3*time.Second)
+}
+
+func CheckTCPWithTimeout(ctx context.Context, target string, timeout time.Duration) TCPResult {
 	result := TCPResult{Target: target}
 
 	dialer := net.Dialer{
-		Timeout: 3 * time.Second,
+		Timeout: timeout,
 	}
 
 	start := time.Now()

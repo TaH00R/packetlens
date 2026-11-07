@@ -12,6 +12,7 @@ import (
 )
 
 type Config struct {
+	AdminToken      string
 	DatabasePath    string
 	Retention       time.Duration
 	CleanupInterval time.Duration
@@ -32,6 +33,17 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 	c := Config{DatabasePath: get("PACKETLENS_DB_PATH", "data/packetlens.db")}
 	if c.DatabasePath == "" {
 		return c, fmt.Errorf("PACKETLENS_DB_PATH must not be empty")
+	}
+	c.AdminToken = get("PACKETLENS_ADMIN_TOKEN", "")
+	if c.AdminToken != "" {
+		if len(c.AdminToken) < 32 || len(c.AdminToken) > 256 {
+			return c, fmt.Errorf("PACKETLENS_ADMIN_TOKEN must be 32..256 characters, or empty to disable management")
+		}
+		for _, v := range c.AdminToken {
+			if v < 33 || v > 126 {
+				return c, fmt.Errorf("PACKETLENS_ADMIN_TOKEN must contain printable ASCII without spaces")
+			}
+		}
 	}
 	var err error
 	c.Retention, err = time.ParseDuration(get("PACKETLENS_RETENTION", "720h"))

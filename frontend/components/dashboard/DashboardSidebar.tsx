@@ -12,9 +12,11 @@ import {
   Globe,
   LayoutDashboard,
   Network,
+  Settings,
 } from "lucide-react";
 
 const navigation = [
+  { label: "Monitoring Targets", icon: Settings, href: "/targets" },
   { label: "Overview", icon: LayoutDashboard, href: "/" },
   { label: "TCP Analytics", icon: Network, href: "/tcp" },
   { label: "DNS Analytics", icon: Globe, href: "/dns" },
