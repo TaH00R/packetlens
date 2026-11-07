@@ -14,6 +14,7 @@ Use it only for destinations you own or are authorized to monitor.
 - Sustained-failure incidents, confirmed recovery, elapsed spans, and a dedicated incident timeline.
 - Persisted cross-target failure correlation with possible shared connectivity indicators.
 - Observed availability for 1h, 24h, 7d, and 30d, with outcome streaks and timestamps.
+- Direct DNS resolver comparisons with persisted A-query outcomes, latency trends and timeout counts.
 - Aggregate and per-target latency charts; failures appear as gaps.
 - Global ranges: last 5 minutes, 15 minutes, hour, 6 hours, 24 hours, or All.
 - Durable SQLite snapshots and probe results, with migrations and configurable retention.
@@ -47,6 +48,7 @@ packetlens/
 |   |   |-- api/          # HTTP and WebSocket handlers
 |   |   |-- monitor/      # Complete monitoring cycles and types
 |   |   |-- target/       # Validated configuration and serialized management
+|   |   |-- resolver/     # Explicit resolver endpoint configuration
 |   |   |-- probe/        # TCP and DNS checks
 |   |   |-- realtime/     # Client registration and snapshot broadcast
 |   |   |-- store/        # Storage interface, SQLite, migrations, retention, test memory store
@@ -197,6 +199,7 @@ JSON error with status 503. Health also returns 503 when the database is unreach
 | GET | `/api/correlations` | Bounded possible shared connectivity event feed |
 | GET / POST | `/api/targets` | Authenticated target list / creation |
 | PUT / DELETE | `/api/targets/{id}` | Authenticated replacement / removal |
+| GET | `/api/dns/resolvers` | Resolver comparisons for the selected retained range |
 | GET | `/api/availability` | Fixed-window observed availability, streaks, last outcomes |
 | GET | `/api/snapshots` | `count`, `snapshots`, `has_more`, `next_cursor` |
 | WebSocket | `/api/ws` | One snapshot per new monitoring cycle |
@@ -545,7 +548,7 @@ from these sustained target incidents. Neither establishes a confirmed cause.
 
 ## Dashboard history and time ranges
 
-The shared monitoring context loads persisted analytics, anomalies, incidents, and correlations
+The shared monitoring context loads persisted analytics, anomalies, incidents, correlations, and DNS resolver comparisons
 every 15 seconds and availability every minute, also refreshing on WebSocket connection/reconnection.
 All pages consume that shared state. Overview summaries and latency trends,
 TCP/DNS analytics, and health jitter use all retained measurements in the global
@@ -766,6 +769,94 @@ The `/targets` page provides add/edit forms, explicit enable/disable controls,
 removal confirmation, refresh, empty states, visible API errors, and pending states.
 Only networks the operator owns or is authorized to monitor should be configured.
 
+## DNS resolver comparison
+
+Existing DNS monitoring still uses the system resolver and its normal LookupHost
+behaviour. Optional resolver comparisons issue separate direct recursive **A-record**
+queries for every enabled DNS domain, at that target's configured interval and
+timeout. No resolver is queried by default. Configure process environment before
+starting the backend, using endpoints you are authorized to query:
+
+```powershell
+$env:PACKETLENS_DNS_RESOLVERS = '192.0.2.53:53,[2001:db8::53]:53'
+```
+
+Those documentation addresses are placeholders; replace them with your own resolver
+endpoints. The setting accepts up to three comma-separated literal IPv4/IPv6
+addresses with ports 1..65535. IPv6 requires brackets. Endpoints are canonicalized;
+duplicates, hostnames, unspecified/multicast addresses, missing ports and empty list
+entries are rejected at startup. Empty/unset disables only comparisons. Restart the
+backend to apply resolver changes. Resolver endpoints are startup configuration,
+not editable through an unauthenticated query or through the target page.
+New/edit/enable/disable operations on DNS targets automatically affect which domains
+are compared. No new frontend environment variable is required.
+
+Each due DNS target creates one system lookup plus one job per explicit resolver.
+All jobs share the existing eight-worker pool and one complete cycle publication.
+Each explicit job has one context deadline covering a UDP query and, if the response
+is truncated, a TCP retry to the same endpoint. UDP queries request recursion and
+use random transaction IDs. Responses must match the query ID, response flag,
+operation, name, type and class. A records are accepted only for the question name
+or an answer CNAME chain (at most 16 links). A CNAME-only reply without an A record
+is a no-answer outcome; the probe does not run a separate chain lookup. Requests
+bypass OS hosts files and search domains, and target names are absolute.
+
+The implementation uses Go's
+[`golang.org/x/net/dns/dnsmessage` codec](https://pkg.go.dev/golang.org/x/net@v0.62.0/dns/dnsmessage)
+for DNS wire parsing/packing instead of a handwritten parser. This is the only added
+production module. It adds no daemon or external infrastructure. No EDNS, DNSSEC
+validation, DoH, DoT, AAAA queries, answer-consistency analysis, retries after ordinary
+failures, or inference of resolver/network root causes is implemented. Ordinary UDP
+responses are bounded to 512 bytes; TCP messages to the DNS 65535-byte length field.
+The transport is conventional unencrypted DNS.
+
+A successful comparison has a matching successful response containing an A address.
+Outcomes are `success`, `timeout`, `network_error`, `dns_error` (for example NXDOMAIN),
+`no_answer`, and `invalid_response`. Failed attempt durations are recorded but never
+used as successful latency, and timeout counts are a subset of failed counts. Empty
+and all-failed latency summaries are null. Timing includes transport and any TCP
+fallback. Resolver caching, rate limits, domain mix and different sample counts can
+all affect comparisons; a failure does not establish that a resolver is down.
+System LookupHost may use A/AAAA, hosts files and OS-specific rules, so it is kept
+separate rather than presented as an identical query benchmark.
+
+Migration 006 adds `dns_resolver_results`, indexed by timestamp, resolver and domain.
+These records commit atomically with the complete snapshot; retention deletes them
+through the snapshot foreign-key cascade. Existing history and target settings are
+preserved. Old system DNS records are not relabeled with an assumed explicit
+resolver and no retrospective comparison data is fabricated.
+
+Snapshot REST/WebSocket payloads gain an optional `dns_comparisons` array. Its rows
+include the existing probe fields plus `resolver` and `outcome`. The `dns` array and
+existing metrics/stats/analytics/availability, anomaly, incident and correlation
+semantics continue to describe the system lookup. Explicit resolver results do not
+advance those detectors or inflate their counts. Snapshot hydration and frontend
+fallback identities preserve the added comparison data across reloads and time
+range changes. At most 96 comparison rows can occur in a cycle (32 domains times
+three endpoints).
+
+`GET /api/dns/resolvers?range=15m` accepts the existing `range` and optional `to`
+parameters, with the same validation as persisted analytics. It does not trigger
+probes or accept arbitrary resolver addresses. Responses contain `range`, `as_of`,
+`from`, `to`, `configured_resolvers`, and summaries in `groups` (per endpoint) and
+`targets` (per domain/endpoint). Summaries include attempts, successful/failed counts,
+timeouts, mean/min/max successful latency, most recent failure timestamp/error, and
+60 time buckets spanning the whole selection. Groups weight successful samples,
+not domain means. Empty buckets have null latency and availability; observed
+all-failed buckets have 0% availability and null latency. Reports stream database
+rows into bounded summaries, with at most 128 historical domain/endpoint identities,
+a 30-second deadline and the existing two-request analytics concurrency limit.
+Bad queries return JSON 400, other methods 405, busy analytics 429, and storage
+failures 503. All existing global ranges, including All retained data, are supported.
+
+The DNS analytics page displays the shared persisted report, refreshes every 15
+seconds and on WebSocket reconnection, and follows the global time range. Its domain
+selector, outcome table, resolver latency lines and last-failure details include
+loading, error, stale and empty states. Historical endpoints remain visible even
+if removed from current startup configuration. Comparing one domain provides a more
+comparable sample mix than the all-domain mean. Configuration changes do not erase
+retained results.
+
 ## Checks
 
 From `backend/`:
@@ -792,8 +883,11 @@ pagination/count/status contracts, invalid state, and recovered/open retention.
 Correlation tests cover inclusive windows, distinct target names, superseding
 successes, expired observations, monitoring gaps, policy retention, out-of-order
 cycles, limits, concurrent writes, restart continuity, rollback, migration from v3,
-filtered cursor pages, API validation, and retention cascades. Tests do not need
-public internet access. Target tests cover canonical validation, duplicates/limits,
+filtered cursor pages, API validation, and retention cascades. DNS comparison tests use local UDP/TCP servers for successful replies, truncation
+fallback, malformed/mismatched packets, NXDOMAIN, missing/unrelated A answers,
+timeouts and cancellation. Storage/report tests cover resolver identity, rollback,
+restart hydration, migration from v5, original-stat isolation, retention, ranges,
+trend counts and all-failed/null latency. Tests do not need public internet access. Target tests cover canonical validation, duplicates/limits,
 serialized concurrent edits, persistence/empty restarts, migration from v4, write
 rollback, API authentication/origins/body/method/rate limits, bounded probe workers,
 per-target due times, in-flight reconfiguration, timeouts and cancellation.
@@ -818,7 +912,9 @@ and range changes while viewing older pages. Correlation tests cover payload
 validation, affected targets, uncertainty warnings, ended overlaps, filters,
 pagination, range resets, errors and empty reports. Target tests cover authentication, add/edit/toggle/removal
 interactions, private request headers, API errors, empty configuration, token
-locking and response validation. DOM chart
+locking and response validation. Resolver tests cover report/snapshot validation,
+historical identity, latency/failure displays, domain/range selection, empty states
+and API failures. DOM chart
 containers have deterministic test dimensions; these tests do not replace visual
 browser verification. The added tools are devDependencies only.
 

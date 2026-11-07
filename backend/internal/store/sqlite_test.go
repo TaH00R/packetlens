@@ -74,7 +74,7 @@ func TestSQLitePersistsAndMigrates(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
 		t.Fatal(err)
 	}
-	if version != 5 || foreignKeys != 1 {
+	if version != 6 || foreignKeys != 1 {
 		t.Fatalf("version=%d foreign_keys=%d", version, foreignKeys)
 	}
 	for _, name := range []string{"snapshots_timestamp_id", "probe_results_timestamp", "probe_results_target_type", "probe_results_type"} {
@@ -413,7 +413,7 @@ func TestUpgradeVersionTwoPreservesAnomalies(t *testing.T) {
 		t.Fatal("migration invented incident history")
 	}
 	var version int
-	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 5 {
+	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 6 {
 		t.Fatal("incident migration was not recorded")
 	}
 }

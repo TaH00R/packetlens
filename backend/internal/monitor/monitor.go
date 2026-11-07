@@ -14,11 +14,13 @@ const MaxConcurrentProbes = 8
 
 type ProbeFunc func(context.Context, target.Config) ProbeResult
 type Monitor struct {
-	Results chan Snapshot
-	mu      sync.Mutex
-	configs []target.Config
-	changed chan struct{}
-	probe   ProbeFunc
+	Results       chan Snapshot
+	mu            sync.Mutex
+	configs       []target.Config
+	changed       chan struct{}
+	probe         ProbeFunc
+	resolvers     []string
+	resolverProbe func(context.Context, string, string, time.Duration) probe.ResolverResult
 }
 
 // NewMonitor preserves the original constructor for callers with static targets.
@@ -36,11 +38,13 @@ func NewMonitor(interval time.Duration, targets, domains []string) *Monitor {
 }
 
 // run may be injected by deterministic tests. Production uses context-aware probes.
-func NewConfiguredMonitor(configs []target.Config, run ProbeFunc) *Monitor {
+func NewConfiguredMonitor(configs []target.Config, run ProbeFunc, resolvers ...string) *Monitor {
 	if run == nil {
 		run = runProbe
 	}
 	m := &Monitor{Results: make(chan Snapshot, 100), changed: make(chan struct{}, 1), probe: run}
+	m.resolvers = append([]string{}, resolvers...)
+	m.resolverProbe = probe.CheckDNSResolver
 	m.Reconfigure(configs)
 	return m
 }
@@ -122,10 +126,24 @@ func (m *Monitor) Start(ctx context.Context) {
 	}
 }
 func (m *Monitor) runCycle(ctx context.Context, configs []target.Config) bool {
-	results := make([]ProbeResult, len(configs))
+	type job struct {
+		config   target.Config
+		resolver string
+	}
+	tasks := []job{}
+	for _, c := range configs {
+		tasks = append(tasks, job{config: c})
+		if c.Type == "dns" {
+			for _, endpoint := range m.resolvers {
+				tasks = append(tasks, job{config: c, resolver: endpoint})
+			}
+		}
+	}
+	results := make([]ProbeResult, len(tasks))
+	comparisons := make([]DNSComparison, len(tasks))
 	jobs := make(chan int)
 	var wg sync.WaitGroup
-	workers := min(MaxConcurrentProbes, len(configs))
+	workers := min(MaxConcurrentProbes, len(tasks))
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -134,9 +152,16 @@ func (m *Monitor) runCycle(ctx context.Context, configs []target.Config) bool {
 				if ctx.Err() != nil {
 					continue
 				}
-				c := configs[i]
+				c := tasks[i].config
 				probeCtx, cancel := context.WithTimeout(ctx, time.Duration(c.TimeoutMs)*time.Millisecond)
-				p := m.probe(probeCtx, c)
+				var p ProbeResult
+				if tasks[i].resolver == "" {
+					p = m.probe(probeCtx, c)
+				} else {
+					r := m.resolverProbe(probeCtx, c.Address, tasks[i].resolver, time.Duration(c.TimeoutMs)*time.Millisecond)
+					p = ProbeResult{LatencyMs: r.LatencyMs, Success: r.Success, Error: r.Error}
+					comparisons[i] = DNSComparison{Resolver: tasks[i].resolver, Outcome: r.Outcome}
+				}
 				cancel()
 				p.Type = c.Type
 				p.Target = c.Address
@@ -145,7 +170,7 @@ func (m *Monitor) runCycle(ctx context.Context, configs []target.Config) bool {
 			}
 		}()
 	}
-	for i := range configs {
+	for i := range tasks {
 		select {
 		case jobs <- i:
 		case <-ctx.Done():
@@ -160,7 +185,12 @@ func (m *Monitor) runCycle(ctx context.Context, configs []target.Config) bool {
 		return false
 	}
 	snapshot := Snapshot{Timestamp: time.Now(), TCP: []ProbeResult{}, DNS: []ProbeResult{}}
-	for _, p := range results {
+	for i, p := range results {
+		if tasks[i].resolver != "" {
+			comparisons[i].ProbeResult = p
+			snapshot.DNSComparisons = append(snapshot.DNSComparisons, comparisons[i])
+			continue
+		}
 		if p.Type == "tcp" {
 			snapshot.TCP = append(snapshot.TCP, p)
 		} else {

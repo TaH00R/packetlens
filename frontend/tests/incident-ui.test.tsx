@@ -1,3 +1,4 @@
+import { resolverReport } from "./fixtures/resolvers";
 import { correlationReport } from "./fixtures/correlations";
 import { dom } from "./dom-setup";
 import assert from "node:assert/strict";
@@ -16,7 +17,7 @@ after(()=>dom.window.close());
 test("incident timeline distinguishes lifecycle states and responds to filters, pages, and ranges",async(t)=>{
  const calls:string[]=[];
  t.mock.method(globalThis,"fetch",async(input:RequestInfo|URL)=>{
-  const u=new URL(String(input)); if(u.pathname==="/api/correlations") return new Response(JSON.stringify(correlationReport()));calls.push(u.toString());
+  const u=new URL(String(input)); if(u.pathname==="/api/dns/resolvers") return new Response(JSON.stringify(resolverReport(u.searchParams.get("range")??"15m"))); if(u.pathname==="/api/correlations") return new Response(JSON.stringify(correlationReport()));calls.push(u.toString());
   const range=u.searchParams.get("range")??"15m";
   if(u.pathname==="/api/incidents"){
    const status=(u.searchParams.get("status")??"all") as IncidentReport["status"];
@@ -55,7 +56,7 @@ test("incident timeline distinguishes lifecycle states and responds to filters, 
 
 test("empty incident history does not turn isolated failures into incidents",async(t)=>{
  t.mock.method(globalThis,"fetch",async(input:RequestInfo|URL)=>{
-  const u=new URL(String(input)); if(u.pathname==="/api/correlations") return new Response(JSON.stringify(correlationReport()));return new Response(JSON.stringify(u.pathname==="/api/incidents"?incidentReport():u.pathname==="/api/anomalies"?anomalyReport():u.pathname==="/api/analytics"?report():u.pathname==="/api/availability"?availability():{count:0,snapshots:[]}));
+  const u=new URL(String(input)); if(u.pathname==="/api/dns/resolvers") return new Response(JSON.stringify(resolverReport(u.searchParams.get("range")??"15m"))); if(u.pathname==="/api/correlations") return new Response(JSON.stringify(correlationReport()));return new Response(JSON.stringify(u.pathname==="/api/incidents"?incidentReport():u.pathname==="/api/anomalies"?anomalyReport():u.pathname==="/api/analytics"?report():u.pathname==="/api/availability"?availability():{count:0,snapshots:[]}));
  });
  const container=document.createElement("div");document.body.appendChild(container);const root=createRoot(container);
  try{

@@ -1,3 +1,4 @@
+import { resolverReport } from "./fixtures/resolvers";
 import { correlationReport } from "./fixtures/correlations";
 import { dom } from "./dom-setup";
 import assert from "node:assert/strict";
@@ -15,7 +16,7 @@ after(()=>dom.window.close());
 test("anomaly feed shows severity and recovery and paginates with real controls",async(t)=>{
  const calls:string[]=[];
  t.mock.method(globalThis,"fetch",async(input:RequestInfo|URL)=>{
-  const u=new URL(String(input)); if(u.pathname==="/api/correlations") return new Response(JSON.stringify(correlationReport()));calls.push(u.toString());
+  const u=new URL(String(input)); if(u.pathname==="/api/dns/resolvers") return new Response(JSON.stringify(resolverReport(u.searchParams.get("range")??"15m"))); if(u.pathname==="/api/correlations") return new Response(JSON.stringify(correlationReport()));calls.push(u.toString());
   if(u.pathname==="/api/incidents") return new Response(JSON.stringify(incidentReport(u.searchParams.get("range") ?? "15m")));
   if(u.pathname==="/api/anomalies"){
    const old=episode(true);old.id="ffffffffffffffffffffffffffffffff-0";old.target="old:443";

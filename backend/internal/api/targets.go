@@ -17,8 +17,9 @@ import (
 )
 
 type TargetAdmin struct {
-	Manager *target.Manager
-	Token   string
+	Manager      *target.Manager
+	Token        string
+	DNSResolvers []string
 }
 type targetHandler struct {
 	admin  *TargetAdmin

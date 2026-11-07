@@ -9,9 +9,11 @@ import (
 	"github.com/TaH00R/packetlens/backend/internal/anomaly"
 	"github.com/TaH00R/packetlens/backend/internal/correlation"
 	"github.com/TaH00R/packetlens/backend/internal/incident"
+	"github.com/TaH00R/packetlens/backend/internal/resolver"
 )
 
 type Config struct {
+	DNSResolvers    []string
 	AdminToken      string
 	DatabasePath    string
 	Retention       time.Duration
@@ -46,6 +48,10 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		}
 	}
 	var err error
+	c.DNSResolvers, err = resolver.Parse(get("PACKETLENS_DNS_RESOLVERS", ""))
+	if err != nil {
+		return c, fmt.Errorf("PACKETLENS_DNS_RESOLVERS: %w", err)
+	}
 	c.Retention, err = time.ParseDuration(get("PACKETLENS_RETENTION", "720h"))
 	if err != nil || c.Retention < time.Hour || c.Retention > 10*365*24*time.Hour {
 		return c, fmt.Errorf("PACKETLENS_RETENTION must be a duration between 1h and 87600h")

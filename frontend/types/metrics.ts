@@ -8,7 +8,12 @@ export interface ProbeResult {
   timestamp: string;
 }
 
+export interface DNSComparison extends ProbeResult {
+ type: "dns"; resolver: string; outcome: "success" | "timeout" | "network_error" | "dns_error" | "no_answer" | "invalid_response";
+}
+
 export interface MonitoringSnapshot {
+ dns_comparisons?: DNSComparison[];
   id?: string;
   timestamp: string;
   tcp: ProbeResult[];

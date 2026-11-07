@@ -16,6 +16,8 @@ import { parseAnomalies } from "@/lib/anomalies";
 import type { AnomalyReport } from "@/types/anomalies";
 import { parseCorrelations } from "@/lib/correlations";
 import type { CorrelationReport } from "@/types/correlations";
+import { parseResolvers } from "@/lib/resolvers";
+import type { ResolverReport } from "@/types/resolvers";
 import { parseIncidents } from "@/lib/incidents";
 import type { IncidentReport } from "@/types/incidents";
 import { parseAnalytics, parseAvailability } from "@/lib/analytics";
@@ -30,6 +32,8 @@ import { filterHistory, mergeHistory, parseHistory, type TimeRange } from "@/lib
 export type { TimeRange } from "@/lib/monitoring";
 
 interface MonitoringContextType {
+ resolverReport: RemoteReport<ResolverReport>;
+ resolversStale: boolean;
   correlations: RemoteReport<CorrelationReport>;
   correlationsStale: boolean;
   incidents: RemoteReport<IncidentReport>;
@@ -76,6 +80,11 @@ export function MonitoringProvider({
   const anomalies = useRemoteReport(`/api/anomalies?range=${range}&limit=50`, parseAnomalies, 15_000, monitoring.connectionVersion);
   const analytics = useRemoteReport(`/api/analytics?range=${range}`, parseAnalytics, 15_000, monitoring.connectionVersion);
   const availability = useRemoteReport("/api/availability", parseAvailability, 60_000, monitoring.connectionVersion);
+  // Let the initial analytics/availability reads settle before entering the same
+  // bounded backend query pool with the resolver report. Cached data keeps this
+  // enabled during later refreshes.
+  const resolversReady = (analytics.data !== null || analytics.error !== null) && (availability.data !== null || availability.error !== null);
+  const resolverReport = useRemoteReport(resolversReady ? `/api/dns/resolvers?range=${range}` : null,parseResolvers,15_000,monitoring.connectionVersion);
   const [now, setNow] = useState(0);
 
   useEffect(() => {
@@ -154,6 +163,7 @@ export function MonitoringProvider({
   const stale = latest !== null && now - Date.parse(latest.timestamp) > 15_000;
 
   const analyticsStale = analytics.data !== null && now - Date.parse(analytics.data.as_of) > 45_000;
+  const resolversStale = resolverReport.data !== null && now-Date.parse(resolverReport.data.as_of)>45_000;
   const correlationsStale = correlations.data !== null && now - Date.parse(correlations.data.as_of) > 45_000;
   const incidentsStale = incidents.data !== null && now - Date.parse(incidents.data.as_of) > 45_000;
   const anomaliesStale = anomalies.data !== null && now - Date.parse(anomalies.data.as_of) > 45_000;
@@ -161,6 +171,8 @@ export function MonitoringProvider({
 
   const value = useMemo(
     () => ({
+      resolverReport,
+      resolversStale,
       correlations,
       correlationsStale,
       incidents,
@@ -183,6 +195,8 @@ export function MonitoringProvider({
       reconnect: monitoring.reconnect,
     }),
     [
+      resolverReport,
+      resolversStale,
       correlations,
       correlationsStale,
       incidents,

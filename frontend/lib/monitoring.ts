@@ -26,6 +26,7 @@ function isProbe(value: unknown, type: ProbeResult["type"]): value is ProbeResul
 export function isSnapshot(value: unknown): value is MonitoringSnapshot {
   return isRecord(value) && isTimestamp(value.timestamp) &&
     (value.id === undefined || (typeof value.id === "string" && /^[a-f0-9]{32}$/.test(value.id))) &&
+    (value.dns_comparisons === undefined || (Array.isArray(value.dns_comparisons) && value.dns_comparisons.length<=96 && value.dns_comparisons.every(p => isProbe(p,"dns") && isRecord(p) && typeof p.resolver === "string" && p.resolver.length>0 && p.resolver.length<=128 && (p.success ? p.outcome === "success" : ["timeout","network_error","dns_error","no_answer","invalid_response"].includes(String(p.outcome)))))) &&
     Array.isArray(value.tcp) && value.tcp.every((probe) => isProbe(probe, "tcp")) &&
     Array.isArray(value.dns) && value.dns.every((probe) => isProbe(probe, "dns"));
 }
@@ -44,7 +45,7 @@ function snapshotKey(snapshot: MonitoringSnapshot): string {
   const probes = (results: ProbeResult[]) => results.map((result) =>
     JSON.stringify([result.type, result.target, result.timestamp, result.success, result.latency_ms, result.error ?? ""])
   ).sort();
-  return JSON.stringify([snapshot.timestamp, probes(snapshot.tcp), probes(snapshot.dns)]);
+  return JSON.stringify([snapshot.timestamp, probes(snapshot.tcp), probes(snapshot.dns), (snapshot.dns_comparisons ?? []).map(p => JSON.stringify([p.resolver,p.outcome,probes([p])[0]])).sort()]);
 }
 
 export function mergeHistory(...histories: MonitoringSnapshot[][]): MonitoringSnapshot[] {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TaH00R/packetlens/backend/internal/probe"
 	"github.com/TaH00R/packetlens/backend/internal/target"
 )
 
@@ -17,6 +18,38 @@ func configs(n int) []target.Config {
 		out = append(out, target.Config{ID: fmt.Sprintf("%032x", i+1), Type: "tcp", Address: fmt.Sprintf("host%d:443", i), Enabled: true, IntervalMs: 5000, TimeoutMs: 3000})
 	}
 	return out
+}
+
+func TestDNSResolverFanoutUsesSharedPool(t *testing.T) {
+	c := configs(10)
+	for i := range c {
+		c[i].Type = "dns"
+	}
+	var active, peak atomic.Int32
+	measure := func() {
+		n := active.Add(1)
+		for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {
+		}
+		time.Sleep(time.Millisecond)
+		active.Add(-1)
+	}
+	m := NewConfiguredMonitor(c, func(context.Context, target.Config) ProbeResult { measure(); return ProbeResult{Success: true} }, "127.0.0.1:53", "127.0.0.2:53")
+	m.resolverProbe = func(context.Context, string, string, time.Duration) probe.ResolverResult {
+		measure()
+		return probe.ResolverResult{DNSResult: probe.DNSResult{Success: true, LatencyMs: 3}, Outcome: "success"}
+	}
+	if !m.runCycle(context.Background(), c) {
+		t.Fatal("missing cycle")
+	}
+	s := receive(t, m)
+	if len(s.DNS) != 10 || len(s.DNSComparisons) != 20 || peak.Load() > MaxConcurrentProbes {
+		t.Fatal("incorrect bounded fanout", len(s.DNS), len(s.DNSComparisons), peak.Load())
+	}
+	for _, p := range s.DNSComparisons {
+		if p.Type != "dns" || p.Outcome != "success" || p.Resolver == "" {
+			t.Fatal(p)
+		}
+	}
 }
 func receive(t *testing.T, m *Monitor) Snapshot {
 	t.Helper()

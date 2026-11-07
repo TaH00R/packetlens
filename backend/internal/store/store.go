@@ -14,6 +14,7 @@ import (
 
 	"github.com/TaH00R/packetlens/backend/internal/anomaly"
 	"github.com/TaH00R/packetlens/backend/internal/monitor"
+	"github.com/TaH00R/packetlens/backend/internal/resolver"
 )
 
 const DefaultLimit = 1000
@@ -65,6 +66,7 @@ type Store interface {
 	Stats(context.Context, Filter) (Statistics, error)
 	HistoryBounds(context.Context) (*time.Time, *time.Time, error)
 	WalkMeasurements(context.Context, Filter, bool, func(Measurement) error) error
+	WalkDNSComparisons(context.Context, Filter, func(time.Time, monitor.DNSComparison) error) error
 	QueryAnomalies(context.Context, AnomalyQuery) (AnomalyPage, error)
 	QueryIncidents(context.Context, IncidentQuery) (IncidentPage, error)
 	QueryCorrelations(context.Context, EpisodeQuery) (CorrelationPage, error)
@@ -162,6 +164,15 @@ func prepareSnapshot(s monitor.Snapshot) (monitor.Snapshot, error) {
 			if p.Type != group.typ || p.Target == "" || len(p.Target) > 512 || math.IsNaN(p.LatencyMs) || math.IsInf(p.LatencyMs, 0) || p.LatencyMs < 0 || p.Timestamp.IsZero() || p.Timestamp.UTC().Year() < 1 || p.Timestamp.UTC().Year() > 9999 {
 				return s, errors.New("invalid probe result")
 			}
+		}
+	}
+	if len(s.DNSComparisons) > 96 {
+		return s, errors.New("too many DNS comparisons")
+	}
+	for _, p := range s.DNSComparisons {
+		endpoint, err := resolver.Normalize(p.Resolver)
+		if err != nil || endpoint != p.Resolver || p.Type != "dns" || !resolver.ValidOutcome(p.Outcome, p.Success) || p.Target == "" || len(p.Target) > 512 || p.Timestamp.IsZero() || p.Timestamp.UTC().Year() < 1 || p.Timestamp.UTC().Year() > 9999 || math.IsNaN(p.LatencyMs) || math.IsInf(p.LatencyMs, 0) || p.LatencyMs < 0 {
+			return s, errors.New("invalid DNS comparison")
 		}
 	}
 	return cloneSnapshot(s), nil

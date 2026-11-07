@@ -23,6 +23,9 @@ func NewServer(
 	if len(admin) > 0 {
 		settings = admin[0]
 	}
+	if settings != nil {
+		handler.dnsResolvers = append([]string{}, settings.DNSResolvers...)
+	}
 	targets := newTargetHandler(settings)
 	mux.Handle("/api/targets", targets)
 	mux.Handle("/api/targets/", targets)
@@ -31,6 +34,7 @@ func NewServer(
 	mux.HandleFunc("/api/metrics", handler.Metrics)
 	mux.HandleFunc("/api/stats", handler.Stats)
 	mux.HandleFunc("/api/analytics", handler.Analytics)
+	mux.HandleFunc("/api/dns/resolvers", handler.DNSResolvers)
 	mux.HandleFunc("/api/anomalies", handler.Anomalies)
 	mux.HandleFunc("/api/incidents", handler.Incidents)
 	mux.HandleFunc("/api/correlations", handler.Correlations)

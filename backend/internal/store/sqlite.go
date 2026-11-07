@@ -172,6 +172,9 @@ func (s *SQLiteStore) SaveSnapshot(ctx context.Context, snapshot monitor.Snapsho
 			ordinal++
 		}
 	}
+	if err := saveDNSComparisons(ctx, tx, snapshot); err != nil {
+		return snapshot, err
+	}
 	if err := s.processCorrelation(ctx, tx, snapshot); err != nil {
 		return snapshot, err
 	}
@@ -294,6 +297,9 @@ func (s *SQLiteStore) QuerySnapshots(ctx context.Context, q Query) (Page, error)
 		if rowErr != nil {
 			return Page{}, fmt.Errorf("read probes: %w", rowErr)
 		}
+	}
+	if err := hydrateDNSComparisons(ctx, tx, &page); err != nil {
+		return Page{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return Page{}, fmt.Errorf("finish history read: %w", err)

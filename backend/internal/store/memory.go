@@ -298,6 +298,7 @@ func (s *MemoryStore) GetAll() []*monitor.ProbeResult {
 }
 
 func cloneSnapshot(snapshot monitor.Snapshot) monitor.Snapshot {
+	snapshot.DNSComparisons = append([]monitor.DNSComparison{}, snapshot.DNSComparisons...)
 	snapshot.TCP = append(make([]monitor.ProbeResult, 0, len(snapshot.TCP)), snapshot.TCP...)
 	snapshot.DNS = append(make([]monitor.ProbeResult, 0, len(snapshot.DNS)), snapshot.DNS...)
 	return snapshot

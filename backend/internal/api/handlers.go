@@ -16,6 +16,7 @@ import (
 )
 
 type Handler struct {
+	dnsResolvers   []string
 	store          store.Store
 	analyticsSlots chan struct{}
 }

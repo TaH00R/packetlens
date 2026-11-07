@@ -1,3 +1,4 @@
+import { resolverReport } from "./fixtures/resolvers";
 import { dom } from "./dom-setup";
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
@@ -29,7 +30,7 @@ test("correlation validation rejects invalid members, policies and lifecycle", (
 test("correlation feed renders uncertainty, affected targets, ended overlaps, filters and pagination", async t => {
   const calls: string[] = [];
   t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
-    const u = new URL(String(input)); calls.push(u.toString()); const range = u.searchParams.get("range") ?? "15m";
+    const u = new URL(String(input)); if(u.pathname==="/api/dns/resolvers") return new Response(JSON.stringify(resolverReport(u.searchParams.get("range")??"15m"))); calls.push(u.toString()); const range = u.searchParams.get("range") ?? "15m";
     if (u.pathname === "/api/correlations") {
       const old = u.searchParams.has("before"); const event = correlationEvent(old); if (old) event.id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-0";
       const body = correlationReport(range, [event]); body.has_more = !old; body.next_cursor = old ? "" : "older-correlations"; return new Response(JSON.stringify(body));
@@ -51,7 +52,7 @@ test("correlation errors and empty reports do not imply healthy connectivity", a
   let fail = false;
   t.mock.method(console, "error", () => {});
   t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL) => {
-    const u = new URL(String(input)); if (fail) return new Response("unavailable", { status: 503 });
+    const u = new URL(String(input)); if(u.pathname==="/api/dns/resolvers") return new Response(JSON.stringify(resolverReport(u.searchParams.get("range")??"15m"))); if (fail) return new Response("unavailable", { status: 503 });
     return new Response(JSON.stringify(u.pathname === "/api/correlations" ? correlationReport() : u.pathname === "/api/incidents" ? incidentReport() : u.pathname === "/api/anomalies" ? anomalyReport() : u.pathname === "/api/analytics" ? report() : u.pathname === "/api/availability" ? availability() : { count: 0, snapshots: [] }));
   });
   const container = document.createElement("div"); const root = createRoot(container);

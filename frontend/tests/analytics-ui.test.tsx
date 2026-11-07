@@ -1,3 +1,4 @@
+import { resolverReport } from "./fixtures/resolvers";
 import { correlationReport } from "./fixtures/correlations";
 import { dom } from "./dom-setup";
 import assert from "node:assert/strict";
@@ -27,7 +28,7 @@ test("renders percentiles and availability, and target/window selectors respond"
   const signals: AbortSignal[] = [];
   const fetcher: typeof fetch = async (input, options) => {
     if (options?.signal) signals.push(options.signal);
-    const url = new URL(String(input));
+    const url = new URL(String(input)); if(url.pathname==="/api/dns/resolvers") return new Response(JSON.stringify(resolverReport(url.searchParams.get("range")??"15m")));
     if (url.pathname === "/api/correlations") return new Response(JSON.stringify(correlationReport(url.searchParams.get("range") ?? "15m")));
     const body = url.pathname === "/api/incidents" ? incidentReport(url.searchParams.get("range") ?? "15m") : url.pathname === "/api/anomalies" ? anomalyReport(url.searchParams.get("range") ?? "15m") : url.pathname === "/api/analytics" ? report(url.searchParams.get("range") as TimeRange) : url.pathname === "/api/availability" ? availability() : { count:0, snapshots:[] };
     return new Response(JSON.stringify(body), { status:200 });
@@ -57,7 +58,7 @@ test("renders percentiles and availability, and target/window selectors respond"
 
 test("empty charts and unavailable datasets do not show invented zero latencies", async (t) => {
   t.mock.method(globalThis,"fetch",async (input: RequestInfo | URL) => {
-    const path = new URL(String(input)).pathname;
+    const path = new URL(String(input)).pathname; if(path==="/api/dns/resolvers") return new Response(JSON.stringify(resolverReport()));
     if (path === "/api/correlations") return new Response(JSON.stringify(correlationReport()));
     return new Response(JSON.stringify(path === "/api/incidents" ? incidentReport() : path === "/api/anomalies" ? anomalyReport() : path === "/api/analytics" ? report("15m",50,true) : path === "/api/availability" ? availability(true) : { count:0,snapshots:[] }));
   });
@@ -74,7 +75,7 @@ test("empty charts and unavailable datasets do not show invented zero latencies"
 test("late responses for an old range cannot overwrite the new selection", async (t) => {
   let finishOld: ((response: Response) => void) | undefined;
   t.mock.method(globalThis,"fetch",async (input: RequestInfo | URL) => {
-    const url = new URL(String(input));
+    const url = new URL(String(input)); if(url.pathname==="/api/dns/resolvers") return new Response(JSON.stringify(resolverReport(url.searchParams.get("range")??"15m")));
     if (url.pathname === "/api/correlations") return new Response(JSON.stringify(correlationReport(url.searchParams.get("range") ?? "15m")));
     if (url.pathname === "/api/analytics" && url.searchParams.get("range") === "15m") return await new Promise<Response>((resolve) => { finishOld=resolve });
     return new Response(JSON.stringify(url.pathname === "/api/incidents" ? incidentReport(url.searchParams.get("range") ?? "15m") : url.pathname === "/api/anomalies" ? anomalyReport(url.searchParams.get("range") ?? "15m") : url.pathname === "/api/analytics" ? report("1h",100) : url.pathname === "/api/availability" ? availability() : { count:0,snapshots:[] }));

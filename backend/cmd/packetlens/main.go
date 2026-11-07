@@ -54,13 +54,14 @@ func run() error {
 	log.Printf("Failure incident detector | failure_threshold=%d | recovery_threshold=%d | maximum_observation_gap=%s", cfg.Incident.FailureThreshold, cfg.Incident.RecoveryThreshold, cfg.Incident.MaxGap)
 	log.Printf("Latency anomaly detector | window=%d | minimum_samples=%d | mad_multiplier=%g | minimum_delta_ms=%g | baseline_max_age=%s | recovery_successes=%d", cfg.Anomaly.Window, cfg.Anomaly.MinSamples, cfg.Anomaly.Multiplier, cfg.Anomaly.MinDeltaMs, cfg.Anomaly.MaxAge, cfg.Anomaly.RecoverySamples)
 
-	m := monitor.NewConfiguredMonitor(nil, nil)
+	m := monitor.NewConfiguredMonitor(nil, nil, cfg.DNSResolvers...)
 	targetCtx, targetCancel := context.WithTimeout(ctx, 5*time.Second)
 	manager, err := target.NewManager(targetCtx, database, m.Reconfigure)
 	targetCancel()
 	if err != nil {
 		return err
 	}
+	log.Printf("DNS resolver comparison configured | resolvers=%v", cfg.DNSResolvers)
 	log.Printf("Target configuration loaded | count=%d | management_enabled=%t", len(manager.List()), cfg.AdminToken != "")
 
 	var background sync.WaitGroup
@@ -117,7 +118,7 @@ func run() error {
 
 	go m.Start(ctx)
 
-	server := api.NewServer(database, hub, &api.TargetAdmin{Manager: manager, Token: cfg.AdminToken})
+	server := api.NewServer(database, hub, &api.TargetAdmin{Manager: manager, Token: cfg.AdminToken, DNSResolvers: cfg.DNSResolvers})
 	serverErrors := make(chan error, 1)
 
 	go func() {
